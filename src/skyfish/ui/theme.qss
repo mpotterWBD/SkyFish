@@ -1,0 +1,137 @@
+/* SkyFish base theme - same dark palette as oilIQ's theme.qss */
+
+* {
+    font-family: "Segoe UI", "Cantarell", sans-serif;
+}
+
+QMainWindow, QWidget {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+}
+
+/* Menu bar: File / View / Help across the top. */
+QMenuBar {
+    background-color: #252525;
+    color: #e0e0e0;
+    border-bottom: 1px solid #3d3d3d;
+    padding: 2px 4px;
+}
+
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 3px;
+}
+
+QMenuBar::item:selected, QMenuBar::item:pressed {
+    background-color: #2f4a5c;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #3d3d3d;
+    margin: 4px 6px;
+}
+
+QMenu::item:disabled {
+    color: #6a6a6a;
+}
+
+/* The left column's header: the logo and version. */
+QLabel#appLogo {
+    background-color: transparent;
+}
+
+QLabel#appVersion {
+    font-size: 13px;
+    color: #9a9a9a;
+    padding-bottom: 4px;
+}
+
+QPlainTextEdit#codeViewer {
+    background-color: #141414;
+    color: #D4D4D4;
+    border: 1px solid #3d3d3d;
+    font-family: "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: 13px;
+    selection-background-color: #2f4a5c;
+}
+
+QLabel#panelTitle {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e0e0e0;
+}
+
+QLabel#panelMessage {
+    font-size: 12px;
+    color: #9a9a9a;
+}
+
+QCheckBox {
+    spacing: 6px;
+    margin-right: 14px;
+}
+
+/* Drawn explicitly - the platform's default box can vanish on the dark
+   background. Green when ticked, like oilIQ's start buttons. */
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #7a7a7a;
+    border-radius: 3px;
+    background-color: #141414;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #35C053;
+    border: 1px solid #2a9843;
+}
+
+QTreeWidget#functionsList {
+    background-color: #141414;
+    border: 1px solid #3d3d3d;
+    selection-background-color: #2f4a5c;
+    font-family: "Consolas", "DejaVu Sans Mono", monospace;
+    font-size: 12px;
+}
+
+QPushButton#smallButton {
+    background-color: #2d2d2d;
+    border: 1px solid #3d3d3d;
+    border-radius: 4px;
+    padding: 2px 10px;
+    color: #e0e0e0;
+}
+
+QPushButton#smallButton:hover {
+    background-color: #3a3a3a;
+}
+
+QPushButton#smallButton:pressed {
+    background-color: #252525;
+}
+
+QGraphicsView#cardCanvas {
+    border: 1px solid #3d3d3d;
+}
+
+QMenu {
+    background-color: #252525;
+    border: 1px solid #3d3d3d;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 5px 18px;
+    border-radius: 3px;
+}
+
+QMenu::item:selected {
+    background-color: #2f4a5c;
+}
+
+QSplitter::handle {
+    background-color: #1e1e1e;
+    width: 6px;
+}

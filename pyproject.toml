@@ -1,0 +1,26 @@
+[project]
+name = "skyfish"
+version = "0.1.0"
+description = "SkyFish Code Analytics - source-code statistics browser (PySide6)"
+readme = "README.md"
+authors = [
+    { name = "Mike Potter", email = "mike_potter@westbounddesigns.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pyside6>=6.7,<6.8",
+    "tree-sitter>=0.23",
+    "tree-sitter-c>=0.23",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+skyfish = "skyfish.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
