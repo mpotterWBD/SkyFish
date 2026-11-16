@@ -184,3 +184,54 @@ def test_python_while_true():
     )
     assert rows_of(text, ".py", "serve")[1] == ["1"]
     assert rows_of(text, ".py", "poll")[1] == [END]
+
+ACTION_TEXT = """
+static uint8_t reply(const char *key, uint8_t slot) {
+    char tx[TX_MAX];
+    uint16_t len = snprintf(tx, sizeof(tx), "T=%d\\r", slot);
+    if (len == 0) {
+        logError(len);
+        return 0;
+    }
+    retries = 0;
+    retries += 2;
+    slot++;
+    sendPacket(tx, len);
+    return 1;
+}
+"""
+
+
+def test_actions_calls_and_assignments():
+    from skyfish.analysis.logic import actions
+
+    [f] = [f for f in find_functions(ACTION_TEXT, ".c") if f.name == "reply"]
+    found = [(a.target, a.call, a.args, a.expression) for a in actions(f.flow)]
+    assert found == [
+        ("len", "snprintf", ("tx", "sizeof(tx)", "\"T=%d\\r\"", "slot"),
+         "snprintf(tx, sizeof(tx), \"T=%d\\r\", slot)"),
+        ("", "logError", ("len",), ""),          # inside the if branch
+        ("retries", "", (), "0"),
+        ("retries", "", (), "retries + (2)"),    # += written as its result
+        ("slot", "", (), "slot + 1"),            # ++ likewise
+        ("", "sendPacket", ("tx", "len"), ""),
+    ]
+    assert [a.text for a in actions(f.flow)][:2] == [
+        "uint16_t len = snprintf(tx, sizeof(tx), \"T=%d\\r\", slot)",
+        "logError(len)",
+    ]
+    assert all(a.span is not None and a.span.line == a.line for a in actions(f.flow))
+
+
+def test_actions_do_not_disturb_the_logic_rows():
+    rows, outs = rows_of(ACTION_TEXT, ".c", "reply")
+    assert rows == [(0, "if", "len == 0", "0"), (0, OTHERWISE, "", "1")]
+    assert outs == ["0", "1"]
+
+
+def test_plain_declarations_are_not_actions():
+    from skyfish.analysis.logic import actions
+
+    text = "void f(void) {\n    int i = 0;\n    char buf[4];\n    i;\n}\n"
+    [f] = find_functions(text, ".c")
+    assert actions(f.flow) == []

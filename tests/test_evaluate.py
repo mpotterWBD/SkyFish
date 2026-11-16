@@ -52,6 +52,14 @@ def test_comparing_two_strings_is_pointer_comparison_so_unknown():
     assert result == Evaluation(None, ('key == "TEMP"',))
 
 
+def test_compute_expression_gives_the_value_itself():
+    from skyfish.analysis.evaluate import Computation, compute_expression
+    assert compute_expression("(len + 1) * 2", {"len": 3}) == Computation(True, 8)
+    assert compute_expression("strlen(s)", {"s": "TEMP"}) == Computation(True, 4)
+    assert compute_expression("limit - used", {"limit": 8}) \
+        == Computation(False, unresolved=("used",))
+
+
 def test_integer_arithmetic_is_c_not_python():
     # C truncates division toward zero; the remainder keeps the dividend's sign.
     assert evaluate_condition("-7 / 2 == -3", {}) == Evaluation(True)
@@ -89,9 +97,23 @@ def test_ternary_follows_the_known_condition():
     assert evaluate_condition("(ok ? 5 : 5) == 5", {}) == Evaluation(True)
 
 
+def test_stdlib_calls_resolve_by_contract():
+    # strcmp has a contract now (stdlib_c.py) - the old pointer excuse is gone.
+    assert evaluate_condition('strcmp(key, "TEMP") == 0', {"key": "TEMP"}) == Evaluation(True)
+    assert evaluate_condition('strcmp(key, "TEMP") == 0', {"key": "HUM"}) == Evaluation(False)
+    assert evaluate_condition("strlen(name) > used", {"name": "ab", "used": 1}) == Evaluation(True)
+    assert evaluate_condition("strchr(line, ':') != NULL", {"line": "T:1"}) == Evaluation(True)
+    assert evaluate_condition("isdigit(c) && c != '0'", {"c": ord("7")}) == Evaluation(True)
+
+
+def test_a_stdlib_call_blames_its_unknown_argument():
+    assert evaluate_condition('strcmp(key, "TEMP") == 0', {}) == Evaluation(None, ("key",))
+
+
 def test_calls_fields_and_elements_are_unknown_as_written():
-    assert evaluate_condition("strcmp(a, b) == 0", {"a": "x", "b": "x"}) \
-        == Evaluation(None, ("strcmp(a, b)",))
+    # calcCrc isn't standard C - no contract, so the call itself is the blocker.
+    assert evaluate_condition("calcCrc(buf, len) == 0", {"buf": b"\x01", "len": 1}) \
+        == Evaluation(None, ("calcCrc(buf, len)",))
     assert evaluate_condition("s->len > 0", {}) == Evaluation(None, ("s->len",))
     assert evaluate_condition("buf[0] == 0xDB", {"buf": b"\xdb"}) == Evaluation(None, ("buf[0]",))
 

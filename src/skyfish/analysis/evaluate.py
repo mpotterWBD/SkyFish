@@ -12,9 +12,15 @@ not re-scanned by hand, and evaluated with C's rules: || and && short-circuit
 (a side that decides the answer makes the other side's unknowns irrelevant),
 integer division truncates toward zero, a pointer is true when it isn't NULL,
 and a cast to a C integer type wraps to that type's bits (values.py's 32-bit
-ARM sizes). What it won't guess at: calls, struct fields, array elements,
-dereferences and sizeof are unknown, and so is comparing two strings' pointers
-(==/!= against NULL still works) - C compares the pointers, not the text.
+ARM sizes). Calls to functions the C standard pins down are answered by
+contract (stdlib_c.py), so strcmp(key, "TEMP") == 0 resolves. What it won't
+guess at: other calls, struct fields, array elements, dereferences and sizeof
+are unknown, and so is comparing two strings' pointers (==/!= against NULL
+still works) - C compares the pointers, not the text.
+
+compute_expression() is the same machinery giving the computed value instead
+of true/false - for a #define's value (defines.py) or what an assignment's
+right-hand side comes to (a card's black-box rows).
 
 No Qt here, so it can be tested on its own.
 """
@@ -29,6 +35,7 @@ from typing import Mapping
 from tree_sitter import Language, Node, Parser
 import tree_sitter_c
 
+from skyfish.analysis import stdlib_c
 from skyfish.analysis.values import BOOLEAN, INTEGER, REAL, value_type_for
 
 _PARSER = Parser(Language(tree_sitter_c.language()))
@@ -39,7 +46,7 @@ _BUILTINS = {"NULL": None}
 
 # Node types that would need the program's memory to answer - a value card
 # can't provide them, so they're reported as written and left unknown.
-_OPAQUE = ("call_expression", "field_expression", "subscript_expression",
+_OPAQUE = ("field_expression", "subscript_expression",
            "sizeof_expression", "offsetof_expression", "generic_expression")
 
 
@@ -60,6 +67,14 @@ class _Unknown:
         self.names = names
 
 
+@dataclass(frozen=True)
+class Computation:
+    """What an expression comes to with the values given."""
+    known: bool
+    value: object = None        # int/float/bool/str/bytes, None for NULL
+    unresolved: tuple[str, ...] = ()  # as in Evaluation; filled when not known
+
+
 def evaluate_condition(condition: str, values: Mapping[str, object]) -> Evaluation:
     """Evaluate a C condition as written on a card ("" - an else row - and
     anything that doesn't parse come back unknown with nothing to report)."""
@@ -70,6 +85,18 @@ def evaluate_condition(condition: str, values: Mapping[str, object]) -> Evaluati
     if isinstance(result, _Unknown):
         return Evaluation(None, tuple(dict.fromkeys(result.names)))
     return Evaluation(_truth(result))
+
+
+def compute_expression(expression: str, values: Mapping[str, object]) -> Computation:
+    """The value of a C expression - an Action's right-hand side, a #define's
+    body - rather than just which way it leans."""
+    node = _parse(expression)
+    if node is None:
+        return Computation(False)
+    result = _eval(node, values)
+    if isinstance(result, _Unknown):
+        return Computation(False, unresolved=tuple(dict.fromkeys(result.names)))
+    return Computation(True, result)
 
 
 def _parse(condition: str) -> Node | None:
@@ -126,6 +153,8 @@ def _eval(node: Node, values: Mapping[str, object]):
         return _cast(node, values)
     if kind == "comma_expression":
         return _eval(node.child_by_field_name("right"), values)
+    if kind == "call_expression":
+        return _call(node, values)
     if kind == "identifier":
         name = _text(node)
         if name in values:
@@ -151,6 +180,33 @@ def _eval(node: Node, values: Mapping[str, object]):
     if kind in _OPAQUE or kind == "pointer_expression":  # *p and &x need memory too
         return _Unknown([_text(node)])
     return _Unknown([_text(node)])
+
+
+def _call(node: Node, values: Mapping[str, object]):
+    """A call answered by its contract (stdlib_c) when the function and the
+    arguments it needs are known. An unknown stdlib argument reports the
+    argument's blockers; an unknown function reports the call as written."""
+    function = node.child_by_field_name("function")
+    arguments = node.child_by_field_name("arguments")
+    if function is None or function.type != "identifier" or arguments is None:
+        return _Unknown([_text(node)])
+    args: list = []
+    blocked: list[str] = []
+    for child in arguments.named_children:
+        if child.type == "comment":
+            continue
+        result = _eval(child, values)
+        if isinstance(result, _Unknown):
+            blocked += result.names
+            args.append(stdlib_c.UNKNOWN)
+        else:
+            args.append(result)
+    effect = stdlib_c.call_effect(_text(function), args)
+    if effect is None:
+        return _Unknown([_text(node)])
+    if effect.value is stdlib_c.UNKNOWN:
+        return _Unknown(blocked or [_text(node)])
+    return effect.value
 
 
 def _binary(node: Node, values: Mapping[str, object]):

@@ -97,5 +97,27 @@ First version.
   type's bits (`(uint8_t)300` is 44, values.py's 32-bit ARM sizes), `?:`, and the firmware
   `TRUE`/`FALSE` macros. Comparing two strings is left unknown on purpose - C compares the
   pointers, not the text. No UI: for the cards to light up the taken path later.
+- **Black-box back end** - the analysis side of call/assignment rows on cards:
+  - **Actions in the flow tree** (`analysis/logic.py`, `analysis/c_parser.py`): bare calls,
+    assignments (`x = ...`, `x += ...`, `x++`) and declarations initialized by a call
+    (`uint16_t len = snprintf(...)`) ride along in a function's flow as `Action` nodes - the
+    statement as written, the target, the called function and each argument as written, an
+    evaluable value expression (`x += 2` carries `x + (2)`), line and span. `actions(flow)`
+    gathers them in source order; the logic rows are unchanged by them.
+  - **Stdlib contracts** (`analysis/stdlib_c.py`): `call_effect(name, args)` fills in a call's
+    box from the C standard's contract alone - the return value and what it writes
+    (`snprintf(buf, 8, "T=%d\r", 125)` returns 6 and leaves `"T=125\r"` in buf). Covers
+    string.h (strlen/strcmp/strchr/strstr/memcmp and the copies, with C-string `\0` rules), a
+    printf subset (flags, width, precision, `*`; `%u` of a negative refuses rather than
+    guesses a width), ctype.h, atoi/abs, and common math.h. A function it doesn't know returns
+    None - the card's "?" box. `evaluate_condition` uses the contracts too, so
+    `strcmp(key, "TEMP") == 0` now resolves - and blames an unresolved argument, not the call.
+  - **#define extractor** (`analysis/defines.py`): `defines(text)` reads a file's object-like
+    macros into evaluator values - numbers, chars, strings, expressions over earlier defines,
+    continuation lines folded, comments stripped. Function-like macros, bare flags and register
+    tricks are quietly left out. Merge under the card values so the operator always wins:
+    `{**defines(text), **card_values}`.
+  - **compute_expression()** (`analysis/evaluate.py`): the evaluator's value rather than just
+    its truth - for a #define's body, or what an assignment's right-hand side comes to.
 - **Remembered between sessions** (per user, `QSettings`): the last file (reopened at start-up if it's
   still there), the recent files, the panel dividers, and the checkboxes.

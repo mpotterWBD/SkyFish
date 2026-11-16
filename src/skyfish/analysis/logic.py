@@ -2,14 +2,16 @@
 
 The parsers in functions.py reduce a function body to a small flow tree:
 if-chains (each branch with its condition and its own nested flow) and exits
-(return statements). Everything else - plain statements, and for now the
-loops and switches the ifs sit in - is left out, so what remains is "which
-conditions lead to which return".
+(return statements). Calls and assignments ride along as Actions - the black
+boxes a card draws beside its logic - but plain statements and the loops and
+switches the ifs sit in are left out, so what remains is "which conditions
+lead to which return, and what gets done along the way".
 
 logic_rows() flattens that tree into the rows a card draws: one row per
 branch, indented by nesting, with the return value the branch exits through
 (if it does). A branch that doesn't return is a detour: its row has no exit
-and the flow carries on after it.
+and the flow carries on after it. Actions aren't logic rows - read them
+straight off the flow (actions() gathers them) and place them by line.
 """
 
 from __future__ import annotations
@@ -77,6 +79,36 @@ class IfChain:
 
 
 @dataclass(frozen=True)
+class Action:
+    """A call or assignment - a statement that does something on the way to
+    an exit, drawn as its own row (a black box for a call). One of these is a
+    bare call (no target), an assignment (x = ..., x += ..., x++), or a
+    declaration whose initial value is a call (uint16_t crc = calc(buf);)."""
+    text: str      # the statement as written (no trailing ;)
+    target: str    # what's assigned, as written ("" for a bare call)
+    call: str      # the called function ("" when the value isn't a call)
+    args: tuple[str, ...]  # the call's arguments, each as written
+    # The value the target ends up with, as an expression compute_expression
+    # can take: the = right-hand side, "x + (2)" for x += 2, "x + 1" for x++.
+    # "" for a bare call (the call itself is in call/args).
+    expression: str
+    line: int
+    span: Span | None = None  # the whole statement
+
+
+def actions(flow: list) -> list[Action]:
+    """Every Action in the flow, branches included, in source order."""
+    found: list[Action] = []
+    for node in flow:
+        if isinstance(node, Action):
+            found.append(node)
+        elif isinstance(node, IfChain):
+            for branch in node.branches:
+                found += actions(branch.body)
+    return sorted(found, key=lambda a: a.line)
+
+
+@dataclass(frozen=True)
 class LogicRow:
     indent: int        # nesting depth, 0 = the function's own level
     keyword: str       # "if", "else if", "elif", "else", or ALWAYS / OTHERWISE
@@ -108,6 +140,7 @@ FOREVER = "runs forever"
 def terminates(nodes: list) -> bool:
     """True when every path through nodes ends in a return - so the code
     after them (or the end of the function) can't be reached."""
+    nodes = [n for n in nodes if not isinstance(n, Action)]  # doing isn't exiting
     if not nodes:
         return False
     last = nodes[-1]
@@ -128,6 +161,8 @@ def logic_rows(flow: list, end_line: int, end_span: Span | None = None) -> list[
 
     def walk(nodes: list, indent: int) -> None:
         for node in nodes:
+            if isinstance(node, Action):
+                continue  # drawn as its own black-box row, not a logic row
             if isinstance(node, IfChain):
                 for branch in node.branches:
                     exit_node = next((n for n in branch.body if isinstance(n, Exit)), None)

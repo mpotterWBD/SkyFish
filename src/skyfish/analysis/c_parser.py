@@ -27,7 +27,7 @@ from skyfish.analysis.functions import (
     _c_tidy,
     _c_type,
 )
-from skyfish.analysis.logic import END, Branch, Exit, Forever, IfChain, Span
+from skyfish.analysis.logic import END, Action, Branch, Exit, Forever, IfChain, Span
 
 _PARSER = Parser(Language(tree_sitter_c.language()))
 
@@ -219,6 +219,12 @@ def _statement(node: Node, source: _Source, context: str) -> list:
         value = next((c for c in node.named_children if c.type != "comment"), None)
         return [Exit(source.code(value) if value is not None else END, node.start_point[0] + 1,
                      context, source.span(node))]
+    if kind == "expression_statement":
+        inner = next((c for c in node.named_children if c.type != "comment"), None)
+        action = _action(inner, node, source) if inner is not None else None
+        return [action] if action is not None else []
+    if kind == "declaration":
+        return _declaration_actions(node, source)
     if kind in _LOOPS:
         body = node.child_by_field_name("body")
         nodes = _block(body, source, "in loop") if body is not None else []
@@ -242,6 +248,73 @@ def _statement(node: Node, source: _Source, context: str) -> list:
                 nodes += _statement(child, source, context)
         return nodes
     return []
+
+
+# --- actions (calls and assignments - the cards' black boxes) -------------------
+
+_UPDATE_STEP = {"++": "+ 1", "--": "- 1"}
+
+
+def _action(expression: Node, statement: Node, source: _Source) -> Action | None:
+    """The Action a statement's expression is, or None for one that isn't a
+    call or assignment (goto, a bare "x;", ...)."""
+    kind = expression.type
+    text = source.code(statement).rstrip(";").strip()
+    line = statement.start_point[0] + 1
+    span = source.span(statement)
+    if kind == "call_expression":
+        call, args = _call_parts(expression, source)
+        return Action(text, "", call, args, "", line, span)
+    if kind == "assignment_expression":
+        left = expression.child_by_field_name("left")
+        right = expression.child_by_field_name("right")
+        operator = expression.child_by_field_name("operator")
+        if left is None or right is None or operator is None:
+            return None
+        target = source.code(left)
+        if operator.type == "=":
+            value = source.code(right)
+        else:
+            # x += 2 holds x + (2) afterwards - written so it can be computed
+            value = f"{target} {operator.type[:-1]} ({source.code(right)})"
+        call, args = _call_parts(right, source) if right.type == "call_expression" else ("", ())
+        return Action(text, target, call, args, value, line, span)
+    if kind == "update_expression":
+        argument = expression.child_by_field_name("argument")
+        operator = expression.child_by_field_name("operator")
+        if argument is None or operator is None or operator.type not in _UPDATE_STEP:
+            return None
+        target = source.code(argument)
+        return Action(text, target, "", (), f"{target} {_UPDATE_STEP[operator.type]}", line, span)
+    return None
+
+
+def _declaration_actions(node: Node, source: _Source) -> list[Action]:
+    """Declarations whose initial value is a call (uint16_t crc = calc(buf);)
+    - plain "int i = 0;" initializers stay in the variables list only."""
+    out = []
+    for declarator in node.children_by_field_name("declarator"):
+        if declarator.type != "init_declarator":
+            continue
+        value = declarator.child_by_field_name("value")
+        name = _name_of(declarator)
+        if value is None or value.type != "call_expression" or name is None:
+            continue
+        call, args = _call_parts(value, source)
+        out.append(Action(source.code(node).rstrip(";").strip(), source.of(name), call, args,
+                          source.code(value), node.start_point[0] + 1, source.span(node)))
+    return out
+
+
+def _call_parts(call: Node, source: _Source) -> tuple[str, tuple[str, ...]]:
+    """The called name as written (strlen, obj->send) and each argument as
+    written."""
+    function = call.child_by_field_name("function")
+    arguments = call.child_by_field_name("arguments")
+    name = source.code(function) if function is not None else ""
+    args = tuple(source.code(a) for a in (arguments.named_children if arguments is not None else [])
+                 if a.type != "comment")
+    return name, args
 
 
 def _if_chain(node: Node, source: _Source) -> IfChain:
