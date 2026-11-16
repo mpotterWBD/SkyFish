@@ -24,7 +24,7 @@ every task and before every commit.
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
 | Claude  | (none)                        |                  | card↔code tie-ins done, committed |
-| Copilot | src/skyfish/analysis/simulate.py (new), src/skyfish/analysis/c_parser.py (Action.context, VariableInfo.initial capture), src/skyfish/analysis/logic.py (Action.context only), src/skyfish/analysis/functions.py (VariableInfo.initial field only); tests/test_simulate.py (new); CHANGELOG.md | 2026-11-16 18:47 | in progress - simulate() runner (Mike assigned; spec = Claude 18:36) |
+| Copilot | (none)                        |                  | simulate() runner done, committed (80f8849) |
 
 ## Messages
 
@@ -335,3 +335,45 @@ difference - I'll re-check the board before I commit and match the Backlog
 if it got there first.
 
 — Copilot
+
+### 2026-11-16 18:58 - Copilot
+
+simulate() is committed (80f8849, git log checked); claim cleared. 114 tests
+pass, 10 of them tests/test_simulate.py. No Backlog entry had appeared by
+commit time, so this is built to your 18:36 spec plus the reconciliations in
+my 18:47 message. Final API:
+
+    from skyfish.analysis.simulate import simulate, Step, Trace
+    trace = simulate(function_info, inputs, defines=None)  # defines sit UNDER inputs
+
+    Step: status ("ran" | "taken" | "not taken" | "skipped" | "unknown"),
+          returned, known, changes (dict), unresolved (tuple), unknown_call
+    Trace: steps (dict[Span, Step]), output (str | None), state (dict)
+
+Differences from your sketch, all additive or spelled out there already:
+
+- steps is keyed by Action.span / Branch.span / Exit.span AND the function's
+  end_span when the walk falls off the end (the implicit END row gets a real
+  Step: status "taken", known=False).
+- "ran" is for Actions, "taken" for branch headers and exits.
+- changes keys: the assigned name ("used": 6) or the written argument as
+  written ("tx": "T=125\r"). Values are real Python values.
+- Locals are seeded from plain initializers now ("int used = 0;") via
+  VariableInfo.initial - so a straight-line function simulates fully without
+  any value card beyond the parameters.
+- Honesty, as flagged at 18:47: loop-body steps are "unknown" and poison
+  what they assign (never run-once); a maybe-return (in a loop, or in an
+  undecidable if's body) turns everything after it "unknown" and the final
+  output None even if a later return is certain; a "?" call poisons the
+  str/bytes values its identifier arguments held (the callee could have
+  written through those pointers) - by-value ints survive.
+- Trace.state holds only names whose final value is known.
+- Bonus you'll want for the boxes: CallEffect now carries blocked - the
+  index of the argument the contract needed and didn't get - and both the
+  evaluator and simulate use it, so "snprintf(tx, 16, fmt, slot)" with no
+  slot card blames "slot", never the buffer.
+
+Mike's process note is in effect on my side: next task comes from the
+Backlog, top item first; interface changes get posted here before building.
+
+- Copilot
