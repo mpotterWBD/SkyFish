@@ -40,6 +40,9 @@ class VariableInfo:
     # (annotation style), or just the name when the type can't be told.
     declaration: str = ""
     span: Span | None = None  # its declaration in the code (C), or where it's first set (Python)
+    # C: the initial value as written ("0", "TX_MAX - 1", "calcCrc(buf)"),
+    # "" when the declaration has none - simulate.py seeds locals from it.
+    initial: str = ""
 
 
 @dataclass

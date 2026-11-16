@@ -191,21 +191,26 @@ def _call(node: Node, values: Mapping[str, object]):
     if function is None or function.type != "identifier" or arguments is None:
         return _Unknown([_text(node)])
     args: list = []
-    blocked: list[str] = []
+    blocked: list[tuple[str, ...]] = []
     for child in arguments.named_children:
         if child.type == "comment":
             continue
         result = _eval(child, values)
         if isinstance(result, _Unknown):
-            blocked += result.names
+            blocked.append(tuple(result.names))
             args.append(stdlib_c.UNKNOWN)
         else:
+            blocked.append(())
             args.append(result)
     effect = stdlib_c.call_effect(_text(function), args)
     if effect is None:
         return _Unknown([_text(node)])
     if effect.value is stdlib_c.UNKNOWN:
-        return _Unknown(blocked or [_text(node)])
+        # Blame the argument the contract actually needed, when it can say.
+        if effect.blocked is not None and effect.blocked < len(blocked) and blocked[effect.blocked]:
+            return _Unknown(list(blocked[effect.blocked]))
+        names = [name for argument in blocked for name in argument]
+        return _Unknown(names or [_text(node)])
     return effect.value
 
 

@@ -40,9 +40,13 @@ UNKNOWN = _UnknownValue()
 class CallEffect:
     """What one call does: its return value (UNKNOWN when it can't be told
     from the arguments given) and what it writes - (argument index, the new
-    contents that argument points at afterwards)."""
+    contents that argument points at afterwards). When value is UNKNOWN and
+    one argument is what stopped it (missing, or a value the call would die
+    on), blocked is that argument's index - snprintf blames the missing %d
+    value, never the buffer."""
     value: object
     changes: tuple[tuple[int, object], ...] = ()
+    blocked: int | None = None
 
 
 def call_effect(name: str, args: Sequence[object]) -> CallEffect | None:
@@ -53,8 +57,8 @@ def call_effect(name: str, args: Sequence[object]) -> CallEffect | None:
         return None
     try:
         return contract(list(args))
-    except _CantTell:
-        return CallEffect(UNKNOWN)
+    except _CantTell as blocked:
+        return CallEffect(UNKNOWN, blocked=blocked.index)
 
 
 def knows(name: str) -> bool:
@@ -63,14 +67,19 @@ def knows(name: str) -> bool:
 
 
 class _CantTell(Exception):
-    """An argument a contract needs is UNKNOWN, missing or the wrong shape."""
+    """An argument a contract needs is UNKNOWN, missing or the wrong shape.
+    index says which argument, when it's one argument's fault."""
+
+    def __init__(self, index: int | None = None) -> None:
+        super().__init__(index)
+        self.index = index
 
 
 # --- argument readers ------------------------------------------------------------
 
 def _arg(args: list, index: int):
     if index >= len(args) or isinstance(args[index], _UnknownValue):
-        raise _CantTell
+        raise _CantTell(index)
     return args[index]
 
 
@@ -79,14 +88,14 @@ def _int(args: list, index: int) -> int:
     if isinstance(value, bool):
         return int(value)
     if not isinstance(value, int):
-        raise _CantTell
+        raise _CantTell(index)
     return value
 
 
 def _real(args: list, index: int) -> float:
     value = _arg(args, index)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise _CantTell
+        raise _CantTell(index)
     return float(value)
 
 
@@ -97,7 +106,7 @@ def _string(args: list, index: int) -> str:
     if isinstance(value, bytes):
         value = value.decode("latin-1")
     if not isinstance(value, str):
-        raise _CantTell
+        raise _CantTell(index)
     terminator = value.find("\0")
     return value if terminator < 0 else value[:terminator]
 
@@ -108,7 +117,7 @@ def _buffer(args: list, index: int) -> bytes:
     if isinstance(value, str):
         return value.encode("latin-1", errors="replace")
     if not isinstance(value, bytes):
-        raise _CantTell
+        raise _CantTell(index)
     return value
 
 

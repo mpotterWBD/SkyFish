@@ -16,8 +16,10 @@ def test_strlen_stops_at_the_terminator():
 
 
 def test_strlen_of_null_or_unknown_cant_be_told():
-    assert call_effect("strlen", [None]) == CallEffect(UNKNOWN)  # would crash, not return
-    assert call_effect("strlen", [UNKNOWN]) == CallEffect(UNKNOWN)
+    # NULL would crash, not return; UNKNOWN just isn't known. Either way the
+    # contract points at the argument that stopped it.
+    assert call_effect("strlen", [None]) == CallEffect(UNKNOWN, blocked=0)
+    assert call_effect("strlen", [UNKNOWN]) == CallEffect(UNKNOWN, blocked=0)
 
 
 def test_strcmp_gives_a_sign_not_a_distance():

@@ -189,11 +189,13 @@ def _locals(body: Node, source: _Source) -> list[VariableInfo]:
             if name is None:
                 continue
             target = declarator.child_by_field_name("declarator") if declarator.type == "init_declarator" else declarator
+            value = declarator.child_by_field_name("value") if declarator.type == "init_declarator" else None
             own = prefix + source.of(target)
             offset = len(prefix) + len(source.data[target.start_byte:name.start_byte].decode("utf-8", errors="replace"))
             out.append(VariableInfo(source.of(name), LOCAL, name.start_point[0] + 1,
                                     _c_type(own, source.of(name), offset), _c_tidy(own),
-                                    span=source.span(declaration)))
+                                    span=source.span(declaration),
+                                    initial=source.code(value) if value is not None else ""))
     return out
 
 
@@ -221,10 +223,10 @@ def _statement(node: Node, source: _Source, context: str) -> list:
                      context, source.span(node))]
     if kind == "expression_statement":
         inner = next((c for c in node.named_children if c.type != "comment"), None)
-        action = _action(inner, node, source) if inner is not None else None
+        action = _action(inner, node, source, context) if inner is not None else None
         return [action] if action is not None else []
     if kind == "declaration":
-        return _declaration_actions(node, source)
+        return _declaration_actions(node, source, context)
     if kind in _LOOPS:
         body = node.child_by_field_name("body")
         nodes = _block(body, source, "in loop") if body is not None else []
@@ -255,7 +257,7 @@ def _statement(node: Node, source: _Source, context: str) -> list:
 _UPDATE_STEP = {"++": "+ 1", "--": "- 1"}
 
 
-def _action(expression: Node, statement: Node, source: _Source) -> Action | None:
+def _action(expression: Node, statement: Node, source: _Source, context: str) -> Action | None:
     """The Action a statement's expression is, or None for one that isn't a
     call or assignment (goto, a bare "x;", ...)."""
     kind = expression.type
@@ -264,7 +266,7 @@ def _action(expression: Node, statement: Node, source: _Source) -> Action | None
     span = source.span(statement)
     if kind == "call_expression":
         call, args = _call_parts(expression, source)
-        return Action(text, "", call, args, "", line, span)
+        return Action(text, "", call, args, "", line, span, context)
     if kind == "assignment_expression":
         left = expression.child_by_field_name("left")
         right = expression.child_by_field_name("right")
@@ -278,18 +280,19 @@ def _action(expression: Node, statement: Node, source: _Source) -> Action | None
             # x += 2 holds x + (2) afterwards - written so it can be computed
             value = f"{target} {operator.type[:-1]} ({source.code(right)})"
         call, args = _call_parts(right, source) if right.type == "call_expression" else ("", ())
-        return Action(text, target, call, args, value, line, span)
+        return Action(text, target, call, args, value, line, span, context)
     if kind == "update_expression":
         argument = expression.child_by_field_name("argument")
         operator = expression.child_by_field_name("operator")
         if argument is None or operator is None or operator.type not in _UPDATE_STEP:
             return None
         target = source.code(argument)
-        return Action(text, target, "", (), f"{target} {_UPDATE_STEP[operator.type]}", line, span)
+        return Action(text, target, "", (), f"{target} {_UPDATE_STEP[operator.type]}", line, span,
+                      context)
     return None
 
 
-def _declaration_actions(node: Node, source: _Source) -> list[Action]:
+def _declaration_actions(node: Node, source: _Source, context: str) -> list[Action]:
     """Declarations whose initial value is a call (uint16_t crc = calc(buf);)
     - plain "int i = 0;" initializers stay in the variables list only."""
     out = []
@@ -302,7 +305,7 @@ def _declaration_actions(node: Node, source: _Source) -> list[Action]:
             continue
         call, args = _call_parts(value, source)
         out.append(Action(source.code(node).rstrip(";").strip(), source.of(name), call, args,
-                          source.code(value), node.start_point[0] + 1, source.span(node)))
+                          source.code(value), node.start_point[0] + 1, source.span(node), context))
     return out
 
 

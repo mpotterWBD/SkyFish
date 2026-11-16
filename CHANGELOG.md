@@ -119,5 +119,17 @@ First version.
     `{**defines(text), **card_values}`.
   - **compute_expression()** (`analysis/evaluate.py`): the evaluator's value rather than just
     its truth - for a #define's body, or what an assignment's right-hand side comes to.
+- **Runner** (`analysis/simulate.py`): `simulate(function, inputs, defines)` runs a function top
+  to bottom with the card values, carrying state - `used = strlen(dataCSV)` feeds the next if -
+  and returns a Trace: a Step per flow node (keyed by its Span) with status `ran` / `taken` /
+  `not taken` / `skipped` / `unknown`, a call's return value and what it wrote, and why anything
+  unknown is unknown; plus the output reached and every name's final value. Locals pick up their
+  plain initializers (`int used = 0;` - new `VariableInfo.initial`). Honesty rules: a loop's
+  body runs zero-or-many times, not once, so its steps are unknown and what they assign is
+  forgotten; a return inside a loop or an undecidable if makes the final output uncertain even
+  when a later return is sure; a call with no contract could have rewritten whatever its pointer
+  arguments reach, so they're forgotten too. A contract that can't answer now blames the exact
+  argument it needed (`CallEffect.blocked`) - snprintf never blames its buffer. `Action` also
+  carries `context` ("in loop" / "in switch", like `Exit.context`).
 - **Remembered between sessions** (per user, `QSettings`): the last file (reopened at start-up if it's
   still there), the recent files, the panel dividers, and the checkboxes.

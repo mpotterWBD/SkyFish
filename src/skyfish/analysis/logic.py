@@ -94,6 +94,10 @@ class Action:
     expression: str
     line: int
     span: Span | None = None  # the whole statement
+    # "in loop" / "in switch" when the statement sits in a block that runs it
+    # zero or many times (same meaning as Exit.context); "" at its branch's
+    # (or the function's) own level.
+    context: str = ""
 
 
 def actions(flow: list) -> list[Action]:
