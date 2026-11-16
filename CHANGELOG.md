@@ -76,5 +76,16 @@ First version.
   (icon, plus `skyfish.ico`), and with "SkyFish / Code Analytics"; SVG and PNG. Regenerate with
   `uv run python assets/make_logo.py`. `skyfish_logo.png` sits in the window's top-left corner
   (`LOGO_HEIGHT_PX` in `ui/main_window.py`), loaded from `assets/` so a regenerated logo shows up.
+- **Condition evaluator** (`analysis/evaluate.py`): given input values (what value cards hold),
+  says whether a C if condition is true, false or unknown - and when it's unknown, lists what
+  stopped it (names with no value, calls like `strcmp(a, b)`, struct fields, array elements), in
+  the order met. Parsed with the same tree-sitter C grammar as `c_parser.py` and evaluated with
+  C's rules: `||`/`&&` short-circuit (a side that settles the answer makes the other side's
+  unknowns irrelevant), `!`, comparisons, `== NULL` (a value card's NULL tickbox; a string value
+  is a real pointer, true even when empty), integer arithmetic (division truncates toward zero,
+  `-7 % 2` is `-1`, hex/octal/binary/char literals, `100U` suffixes), casts that wrap to the C
+  type's bits (`(uint8_t)300` is 44, values.py's 32-bit ARM sizes), `?:`, and the firmware
+  `TRUE`/`FALSE` macros. Comparing two strings is left unknown on purpose - C compares the
+  pointers, not the text. No UI: for the cards to light up the taken path later.
 - **Remembered between sessions** (per user, `QSettings`): the last file (reopened at start-up if it's
   still there), the recent files, the panel dividers, and the checkboxes.
