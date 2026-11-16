@@ -59,6 +59,16 @@ First version.
   (`while(1)`, `for(;;)`, `while True:`) with no `break` of its own stops the flow at a quiet
   **runs forever** row, so the function has no `end` output (found on `stm32PacketDriver.c`'s
   `waitForBusQuiet`).
+- **C read with tree-sitter** (`analysis/c_parser.py`): `.c` / `.h` files are parsed with a real C
+  grammar (a ready-built wheel - no compiler needed) instead of the brace scanner, which C++ still uses.
+  Same functions, variables and logic as before on Mike's firmware, plus the exact code location
+  (`Span`) of every function, declaration, if header and body, and return - Python files too.
+- **Cards tied to the code**: click a line on a card and the code it came from is highlighted and
+  centred in the code view - a variable's declaration, an input's parameter, an if's header and the
+  return it leaves through, or every return behind an output - with a clicked word marked wherever it's
+  used in that function. Click in the code and the matching line on that function's card lights up (the
+  declaration, if header or return clicked on, else the innermost if around it), and the word is marked
+  on the card and through the function's code. Clicking in the code doesn't move the diagram.
 - **Value cards** (`ui/value_card.py`, `analysis/values.py`): drag a card's blue input dot out onto the
   canvas and a value card appears where it's dropped, wired to that input. Type a value; it's checked
   against the parameter's type as you type - integers by their range (`uint16_t` 0 to 65,535, with

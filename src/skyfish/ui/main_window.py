@@ -101,6 +101,8 @@ class MainWindow(QMainWindow):
         # Right-click in the code > Add Card.
         self.viewer.card_target = self.card_target
         self.viewer.add_card_requested.connect(self.add_function_card)
+        # Click in the code -> the matching card line lights up (see _on_code_clicked).
+        self.viewer.code_clicked.connect(self._on_code_clicked)
 
         self.analytics_panel = QWidget()
         self.analytics_panel.setObjectName("analyticsPanel")
@@ -122,6 +124,8 @@ class MainWindow(QMainWindow):
         filters.addStretch(1)
 
         self.cards = CardCanvas()
+        # Click a card line -> its code is highlighted (see _on_card_clicked).
+        self.cards.card_clicked.connect(self._on_card_clicked)
         for box in (self.show_functions, self.show_methods, self.show_variables, self.show_logic):
             box.toggled.connect(self._apply_card_filters)
         self._apply_card_filters()
@@ -407,6 +411,41 @@ class MainWindow(QMainWindow):
         item.setToolTip(0, f"{text}\n{tooltip}")
         item.setData(0, _LINE_ROLE, line)
         return item
+
+    # --- tie-ins: cards <-> code ------------------------------------------------
+
+    def _on_card_clicked(self, card, spans: list, word: str | None) -> None:
+        """A line (and maybe a word) on a card was clicked: highlight the code
+        it came from, and mark the word everywhere it's used in that function."""
+        for other in self.cards.cards:
+            if other is not card:
+                other.clear_code_link()
+        self.viewer.show_link(spans)
+        self.viewer.mark_word(word, card.function.span)
+
+    def _on_code_clicked(self, line: int, col: int, word: str) -> None:
+        """A click in the code: on the card for that function (if there is
+        one), light the line the clicked code belongs to and mark the word;
+        in the code, highlight what that card line stands for and mark the
+        word throughout the function."""
+        card = self.cards.card_at_code(line, col)
+        for other in self.cards.cards:
+            if other is not card:
+                other.clear_code_link()
+        function = card.function if card is not None else self._function_at(line, col)
+        within = function.span if function is not None else None
+        if card is not None:
+            card.show_code_link(line, col)
+            card.set_highlight(word if word and card.has_word(word) else None)
+            linked = card._runs[card.linked_run][3] if card.linked_run is not None else []
+            self.viewer.show_link(linked, scroll=False)  # don't jump away from where you clicked
+        else:
+            self.viewer.show_link([], scroll=False)
+        self.viewer.mark_word(word or None, within)
+
+    def _function_at(self, line: int, col: int) -> FunctionInfo | None:
+        around = [f for f in self._functions if f.has_body and f.span is not None and f.span.contains(line, col)]
+        return min(around, key=lambda f: f.span.size) if around else None
 
     def _on_list_clicked(self, item: QTreeWidgetItem) -> None:
         self.viewer.go_to_line(item.data(0, _LINE_ROLE))

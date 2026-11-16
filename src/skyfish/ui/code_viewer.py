@@ -130,10 +130,10 @@ class CodeViewer(QPlainTextEdit):
         cursor.setPosition(block.position() + min(col, max(0, block.length() - 1)))
         return cursor
 
-    def show_link(self, spans: list[Span]) -> None:
+    def show_link(self, spans: list[Span], scroll: bool = True) -> None:
         """Highlights exactly the code a card's row came from - a variable's
-        declaration, an if's header, a return - and scrolls the first into
-        view. An empty list clears it."""
+        declaration, an if's header, a return - and (with scroll) brings the
+        first into view. An empty list clears it."""
         self.linked_spans = [s for s in spans if s is not None]
         self._line_marks, self._link_marks = [], []
         for span in self.linked_spans:
@@ -143,7 +143,7 @@ class CodeViewer(QPlainTextEdit):
             mark.format.setBackground(_LINK)
             mark.cursor = cursor
             self._link_marks.append(mark)
-        if self.linked_spans:
+        if self.linked_spans and scroll:
             first = self.linked_spans[0]
             self._scroll_to(self.cursor_for(first.line, first.col))
         self._refresh_marks()
@@ -171,15 +171,15 @@ class CodeViewer(QPlainTextEdit):
         self.setExtraSelections([*self._line_marks, *self._link_marks, *self._word_marks])
 
     def _scroll_to(self, cursor: QTextCursor) -> None:
-        # Jump past it first so the spot ends up near the top, not the bottom.
-        self.moveCursor(QTextCursor.End)
+        # Centred in the view, with the code around it in sight. (Near the
+        # very top or bottom of the file it goes as close as it can.)
         self.setTextCursor(cursor)
-        self.ensureCursorVisible()
+        self.centerCursor()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().mouseReleaseEvent(event)
         if event.button() == Qt.LeftButton and not self.textCursor().hasSelection():
-            cursor = self.cursorForPosition(event.pos())
+            cursor = self.cursorForPosition(event.position().toPoint())
             line, col = cursor.blockNumber() + 1, cursor.positionInBlock()
             cursor.select(QTextCursor.WordUnderCursor)
             word = cursor.selectedText()

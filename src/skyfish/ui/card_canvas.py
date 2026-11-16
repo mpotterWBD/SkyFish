@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from skyfish.analysis.functions import FUNCTION, LOCAL, PARAMETER, FunctionInfo
-from skyfish.analysis.logic import logic_rows, outputs
+from skyfish.analysis.logic import LogicRow, logic_rows, outputs
 from skyfish.ui.highlighter import FUNCTION as FUNCTION_FORMAT
 from skyfish.ui.highlighter import colour_spans
 from skyfish.ui.value_card import ValueCard, Wire
@@ -55,7 +55,8 @@ _DIAMOND = QColor("#C586C0")   # same as if/else in the code
 # matching-word highlight).
 _HIGHLIGHT_FILL = QColor(80, 191, 255, 55)
 _HIGHLIGHT_BORDER = QColor(80, 191, 255, 150)
-_QUIET_TEXT = QColor("#9a9a9a")  # "always", "otherwise", "in loop" ...
+_QUIET_TEXT = QColor("#9a9a9a")
+_LINK_BAND = QColor(38, 79, 120, 150)  # the line tied to the code view - the code view's link blue  # "always", "otherwise", "in loop" ...
 
 # Layout knobs (pixels at 100% zoom).
 GRID_STEP = 20           # canvas dot spacing
@@ -102,6 +103,7 @@ class _Row:
     text_right: float
     exit: str | None
     diamond: bool         # a branch row (◆) rather than always/otherwise
+    logic: LogicRow       # where it came from, with its code spans
 
 
 class FunctionCard(QGraphicsObject):
@@ -117,14 +119,15 @@ class FunctionCard(QGraphicsObject):
         self._metrics = QFontMetricsF(self._font)
         self._italic = QFont(self._font)
         self._italic.setItalic(True)
-        self._variable_spans = [colour_spans(v.declaration, language)
-                                for v in function.variables if v.kind == LOCAL]
+        self._locals = [v for v in function.variables if v.kind == LOCAL]
+        self._variable_spans = [colour_spans(v.declaration, language) for v in self._locals]
         self.parameters = [v for v in function.variables if v.kind == PARAMETER]
         self._input_spans = [colour_spans(v.declaration, language) for v in self.parameters]
         # A value typed into a value card for an input, as shown on its row
         # ("TEMP" in quotes, NULL, 12...), by parameter name.
         self.input_values: dict[str, str] = {}
-        self.logic_rows = logic_rows(function.flow, function.end_line) if function.has_body else []
+        self.logic_rows = (logic_rows(function.flow, function.end_line, function.end_span)
+                           if function.has_body else [])
         self.outputs = outputs(self.logic_rows)
         self.setFlag(QGraphicsItem.ItemIsMovable)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
@@ -132,6 +135,11 @@ class FunctionCard(QGraphicsObject):
         self.setAcceptHoverEvents(True)  # cursor: hand on the title, pointer on words
         self._dragging = False           # a press on the title bar is moving the card
         self.highlight: str | None = None  # the clicked word, marked everywhere in the card
+        # The line lit up because its code was clicked in the code view (an
+        # index into _runs), and the hook that tells the canvas a line or word
+        # on the card was clicked: on_clicked(card, code spans, word).
+        self.linked_run: int | None = None
+        self.on_clicked = None
         # Set by the canvas: called when the card moves or changes shape (wires
         # follow), and when an input's dot is dragged out and dropped.
         self.on_moved = None
@@ -250,7 +258,7 @@ class FunctionCard(QGraphicsObject):
                     spans = colour_spans(label, self._language)
                 text_right = x + self._width_of(spans)
                 self._rows.append(_Row(y + line_h / 2, x, spans, text_right, row.exit,
-                                       row.is_branch))
+                                       row.is_branch, row))
                 content_right = max(content_right, text_right)
                 y += line_h
             y += CARD_PADDING / 2
@@ -273,23 +281,39 @@ class FunctionCard(QGraphicsObject):
             width = max(width, self._port_label_x + label_w + CARD_PADDING + PORT_RADIUS)
         self._size = (width, max(y, self._title_h))
 
-        # Every piece of text on the card as (x, centre y, text): for finding
-        # the word under a click, and for marking a highlighted word wherever
-        # it appears.
+        # Every piece of text on the card as (x, centre y, text, code spans,
+        # body span): for finding the word under a click, marking a
+        # highlighted word wherever it appears, and tying each line to the
+        # code it came from (code spans: what the code view highlights; body
+        # span: clicking anywhere inside it in the code finds this line).
         self._output_label_x = {
             name: max(self._port_label_x, width - CARD_PADDING - PORT_RADIUS - self._width_of(spans))
             for name, spans in (self._output_spans.items() if self._ports else [])
         }
-        runs = [(CARD_PADDING, CARD_PADDING / 2 + line_h / 2, self.function.name)]
+        def text(spans) -> str:
+            return "".join(t for t, _ in spans)
+
+        runs = [(CARD_PADDING, CARD_PADDING / 2 + line_h / 2, self.function.name, [], None)]
         var_y = self._variables_top + CARD_PADDING / 2 + line_h / 2
-        for spans in self._variable_spans if self._show_variables else []:
-            runs.append((CARD_PADDING, var_y, "".join(t for t, _ in spans)))
+        for var, spans in zip(self._locals, self._variable_spans) if self._show_variables else []:
+            runs.append((CARD_PADDING, var_y, text(spans), [var.span], None))
             var_y += line_h
-        runs += [(CARD_PADDING, iy, "".join(t for t, _ in spans)) for iy, spans, _ in self._inputs]
-        runs += [(r.x, r.y, "".join(t for t, _ in r.spans)) for r in self._rows]
-        runs += [(self._output_label_x[name], self._ports[name], "".join(t for t, _ in self._output_spans[name]))
-                 for name in self._ports]
+        params = {p.name: p for p in self.parameters}
+        runs += [(CARD_PADDING, iy, text(spans), [params[name].span], None) for iy, spans, name in self._inputs]
+        for r in self._rows:
+            # A branch stands for its header and the return it leaves through.
+            links = [r.logic.span]
+            if r.logic.exit_span is not None and r.logic.exit_span != r.logic.span:
+                links.append(r.logic.exit_span)
+            runs.append((r.x, r.y, text(r.spans), links, r.logic.body_span))
+        for name in self._ports:
+            # An output stands for every return that leaves through it.
+            returns = [r.logic.exit_span for r in self._rows if r.exit == name and r.logic.exit_span]
+            runs.append((self._output_label_x[name], self._ports[name], text(self._output_spans[name]),
+                         returns, None))
         self._runs = runs
+        if self.linked_run is not None and self.linked_run >= len(runs):
+            self.linked_run = None
 
     # --- clicking words -------------------------------------------------
 
@@ -299,7 +323,7 @@ class FunctionCard(QGraphicsObject):
 
     def word_at(self, pos: QPointF) -> str | None:
         """The identifier under pos (card coordinates), or None."""
-        for x, y, text in self._runs:
+        for x, y, text, _, _ in self._runs:
             if abs(pos.y() - y) > self._line_h / 2 or pos.x() < x:
                 continue
             # Walk the characters: works for any font, monospace or not.
@@ -322,7 +346,7 @@ class FunctionCard(QGraphicsObject):
         if not self.highlight:
             return 0
         pattern = _whole_word(self.highlight)
-        return sum(len(pattern.findall(text)) for _, _, text in self._runs)
+        return sum(len(pattern.findall(text)) for _, _, text, _, _ in self._runs)
 
     def _paint_highlight(self, painter: QPainter) -> None:
         if not self.highlight:
@@ -330,11 +354,62 @@ class FunctionCard(QGraphicsObject):
         pattern = _whole_word(self.highlight)
         painter.setPen(QPen(_HIGHLIGHT_BORDER, 1))
         painter.setBrush(QBrush(_HIGHLIGHT_FILL))
-        for x, y, text in self._runs:
+        for x, y, text, _, _ in self._runs:
             for m in pattern.finditer(text):
                 left = x + self._metrics.horizontalAdvance(text[:m.start()])
                 w = self._metrics.horizontalAdvance(m.group(0))
                 painter.drawRoundedRect(QRectF(left - 1.5, y - self._line_h / 2 + 1, w + 3, self._line_h - 2), 2, 2)
+
+    # --- tie-ins with the code ----------------------------------------------
+
+    def has_word(self, word: str) -> bool:
+        pattern = _whole_word(word)
+        return any(pattern.search(text) for _, _, text, _, _ in self._runs)
+
+    def run_at(self, pos: QPointF) -> int | None:
+        """The piece of text (index into _runs) at pos, if any - not the
+        title, which drags the card. An output's label shares its height with
+        the if that exits through it, so of those the one starting nearest
+        left of pos wins."""
+        best = None
+        for index, (x, y, _, _, _) in enumerate(self._runs):
+            if not index or abs(pos.y() - y) > self._line_h / 2:
+                continue
+            if best is None or (x <= pos.x() and (self._runs[best][0] > pos.x() or x > self._runs[best][0])):
+                best = index
+        return best
+
+    def code_spans_at(self, pos: QPointF) -> list:
+        """The code the line at pos stands for, for the code view to highlight."""
+        index = self.run_at(pos)
+        return [s for s in self._runs[index][3] if s is not None] if index is not None else []
+
+    def show_code_link(self, line: int, col: int) -> bool:
+        """Lights up the line on this card that the code at line, col belongs
+        to: a declaration, if header or return clicked on directly, or else
+        the innermost if whose body holds it. Returns whether one was found."""
+        best, best_size = None, None
+        for index, (_, _, _, spans, body) in enumerate(self._runs):
+            if any(s is not None and s.contains(line, col) for s in spans):
+                best = index  # clicked right on it: that wins
+                break
+            if body is not None and body.contains(line, col) and (best_size is None or body.size < best_size):
+                best, best_size = index, body.size
+        self.linked_run = best
+        self.update()
+        return best is not None
+
+    def clear_code_link(self) -> None:
+        self.linked_run = None
+        self.update()
+
+    def _paint_link(self, painter: QPainter) -> None:
+        if self.linked_run is None:
+            return
+        y = self._runs[self.linked_run][1]
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(_LINK_BAND))
+        painter.drawRect(QRectF(1, y - self._line_h / 2, self._size[0] - 2, self._line_h))
 
     def _in_title(self, pos: QPointF) -> bool:
         return pos.y() <= self._title_h
@@ -366,6 +441,11 @@ class FunctionCard(QGraphicsObject):
             self.setSelected(True)
             word = self.word_at(event.pos())
             self.set_highlight(None if word == self.highlight else word)
+            # Tie it to the code: light this line, and have the code view show
+            # where it came from with the word marked.
+            self.linked_run = self.run_at(event.pos())
+            if self.on_clicked is not None:
+                self.on_clicked(self, self.code_spans_at(event.pos()), self.highlight)
             event.accept()
             return
         super().mousePressEvent(event)
@@ -441,7 +521,8 @@ class FunctionCard(QGraphicsObject):
             painter.setPen(QPen(_BORDER, 1))
             painter.drawLine(QPointF(0, title_h), QPointF(width, title_h))
 
-        self._paint_highlight(painter)  # under the text
+        self._paint_link(painter)       # under the text: the line tied to the code view
+        self._paint_highlight(painter)
         painter.setFont(self._font)
         painter.setPen(FUNCTION_FORMAT.foreground().color())
         painter.drawText(QRectF(CARD_PADDING, CARD_PADDING / 2, width, self._line_h),
@@ -504,6 +585,8 @@ class CardCanvas(QGraphicsView):
     scroll wheel zooms around the mouse pointer."""
 
     cards_changed = Signal(int)    # how many cards there are now
+    # A line or word on a card was clicked: (card, code spans it stands for, word or None).
+    card_clicked = Signal(object, object, object)
     zoom_changed = Signal(float)   # 1.0 = 100%
 
     def __init__(self, parent=None) -> None:
@@ -539,6 +622,7 @@ class CardCanvas(QGraphicsView):
             card.language = language
             card.on_moved = lambda c=card: self._update_wires(c)
             card.on_input_dropped = self.add_value_card
+            card.on_clicked = lambda c, spans, word: self.card_clicked.emit(c, spans, word)
             self._cards[key] = card
             self.scene().addItem(card)
             self._apply_to(card)
@@ -557,6 +641,12 @@ class CardCanvas(QGraphicsView):
         self.cards_changed.emit(len(self._cards))
 
     # --- value cards ----------------------------------------------------------
+
+    def card_at_code(self, line: int, col: int) -> FunctionCard | None:
+        """The card for the function whose code holds line, col - the
+        innermost, for a Python function nested in another."""
+        around = [c for c in self.cards if c.function.span is not None and c.function.span.contains(line, col)]
+        return min(around, key=lambda c: c.function.span.size) if around else None
 
     def value_cards_of(self, card: FunctionCard) -> list[ValueCard]:
         return [vc for (key, _), (vc, _) in self._value_cards.items() if key == card.key]

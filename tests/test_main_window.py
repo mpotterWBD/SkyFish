@@ -244,7 +244,7 @@ def _point_on(card, word, occurrence=0):
     from PySide6.QtCore import QPointF
     from skyfish.ui.card_canvas import _whole_word
     hits = []
-    for x, y, text in card._runs:
+    for x, y, text, _, _ in card._runs:
         for m in _whole_word(word).finditer(text):
             left = x + card._metrics.horizontalAdvance(text[:m.start()])
             hits.append(QPointF(left + card._metrics.horizontalAdvance(word) / 2, y))
@@ -654,3 +654,105 @@ def test_file_new_clears_everything(make_window, tmp_path):
     window2.reopen_last_file()
     assert window2.current_file is None
     assert window2.recent_files() == [path]
+
+
+def _code_text(viewer, span):
+    """The code a span covers, as the code view holds it."""
+    cursor = viewer.cursor_for(span.line, span.col)
+    from PySide6.QtGui import QTextCursor
+    cursor.setPosition(viewer.cursor_for(span.end_line, span.end_col).position(), QTextCursor.KeepAnchor)
+    return cursor.selectedText()
+
+
+def _tie_in_window(make_window, tmp_path):
+    path = tmp_path / "drv.c"
+    path.write_text(ADD_KEY_VALUE_PAIR)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.show_variables.setChecked(True)
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    return window, card
+
+
+def _click_card(window, card, card_point):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    view = window.cards
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, view.mapFromScene(card.mapToScene(card_point)))
+
+
+def _click_code(window, line, col):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    viewer = window.viewer
+    rect = viewer.cursorRect(viewer.cursor_for(line, col))
+    point = rect.center()
+    point.setX(point.x() + 2)  # just inside the character, not on its left edge
+    QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.NoModifier, point)
+
+
+def test_clicking_a_card_line_highlights_its_code(make_window, tmp_path):
+    window, card = _tie_in_window(make_window, tmp_path)
+
+    # The first if row: its header and the return it leaves through.
+    _click_card(window, card, _point_on(card, "dataCSV", 1))  # 0: the input, 1: the if row
+    texts = [_code_text(window.viewer, s) for s in window.viewer.linked_spans]
+    assert texts == ["if(dataCSV == NULL || KEY == NULL || size == 0)", "return false;"]
+    # The clicked word is marked throughout the function's code.
+    assert window.viewer.marked_word == "dataCSV"
+    assert len(window.viewer._word_marks) == 2  # the parameter and the condition
+
+    # A variable line: its declaration.
+    _click_card(window, card, _point_on(card, "number"))
+    assert [_code_text(window.viewer, s) for s in window.viewer.linked_spans] == ["char number[12];"]
+
+    # An output: every return that leaves through it.
+    _click_card(window, card, _point_on(card, "false"))  # the output label
+    shown = [_code_text(window.viewer, s) for s in window.viewer.linked_spans]
+    assert shown == ["return false;"]  # (the real file has two ifs; this cut-down one has one)
+
+
+def test_clicking_code_lights_its_card_line(make_window, tmp_path):
+    window, card = _tie_in_window(make_window, tmp_path)
+
+    def lit_text():
+        return card._runs[card.linked_run][2] if card.linked_run is not None else None
+
+    # On the if's header.
+    _click_code(window, 3, 9)  # "    if(dataCSV" - on dataCSV
+    assert lit_text() == "if dataCSV == NULL || KEY == NULL || size == 0"
+    assert card.highlight == "dataCSV"
+    assert window.viewer.marked_word == "dataCSV"
+
+    # Inside its body: still that if (the innermost one holding it).
+    _click_code(window, 4, 10)  # "        return false;"
+    assert lit_text() == "if dataCSV == NULL || KEY == NULL || size == 0"
+
+    # On a declaration.
+    _click_code(window, 2, 10)  # "    char number[12];"
+    assert lit_text() == "char number[12]"
+    assert card.highlight == "number"
+
+    # On the last return: the "otherwise" line.
+    _click_code(window, 6, 8)  # "    return true;"
+    assert lit_text() == "otherwise"
+
+
+def test_linked_code_is_centred_in_the_code_view(make_window, tmp_path):
+    path = tmp_path / "long.c"
+    filler = "".join(f"int pad{i}(void) {{ return {i}; }}\n" for i in range(150))
+    path.write_text(filler + ADD_KEY_VALUE_PAIR + filler)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    _click_card(window, card, _point_on(card, "dataCSV", 1))  # the first if line
+
+    viewer = window.viewer
+    span = viewer.linked_spans[0]
+    top = viewer.cursorRect(viewer.cursor_for(span.line, span.col)).center().y()
+    middle = viewer.viewport().height() / 2
+    assert abs(top - middle) < viewer.fontMetrics().height() * 1.5
