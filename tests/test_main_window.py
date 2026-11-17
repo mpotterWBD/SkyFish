@@ -915,7 +915,9 @@ def test_save_and_reopen_brings_the_diagram_back(make_window, tmp_path):
     assert values["size"].value == 32 and (values["size"].pos().x(), values["size"].pos().y()) == (30, 90)
     assert values["dataCSV"].is_null
     assert main.input_values == {"size": "32", "dataCSV": "NULL"}
-    assert abs(window.cards.zoom - 0.8) < 1e-6
+    # The view fits the cards (not the saved zoom): every card is in view.
+    visible = window.cards.mapToScene(window.cards.viewport().rect()).boundingRect()
+    assert visible.contains(window.cards.cards_rect())
     assert not any(c.stale for c in cards.values())
     assert window.diagram_path == tmp_path / "drv.skyfish"
 
@@ -1158,3 +1160,24 @@ def test_ctrl_click_on_a_card_shows_an_inputs_value_on_the_card(make_window, tmp
     QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
                      view.mapFromScene(card.mapToScene(_point_on(card, "size", 1))))
     assert card.highlight == "size"
+
+
+def test_diagram_fits_the_cards_when_opened_and_as_the_window_resizes(make_window, tmp_path):
+    path = _saved_diagram(make_window, tmp_path)
+    window = make_window()
+    window.resize(900, 600)
+    window.show()
+    window.open_file(path)
+    view = window.cards
+
+    def all_in_view():
+        return view.mapToScene(view.viewport().rect()).boundingRect().contains(view.cards_rect())
+
+    assert all_in_view() and view.zoom <= 1.0
+    window.resize(1800, 1000)  # the window maximizing after start-up
+    assert all_in_view()
+    # Once you zoom yourself, it leaves the view alone.
+    view.zoom_by(3)  # View > Zoom In (the wheel and dragging the canvas count too)
+    zoom = view.zoom
+    window.resize(1000, 700)
+    assert view.zoom == zoom

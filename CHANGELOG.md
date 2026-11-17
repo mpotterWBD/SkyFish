@@ -88,7 +88,10 @@ First version.
   "value hidden") or why it showed nothing (not an input, no value yet, the function has no card).
 - **Saving diagrams** (`diagram_file.py`): **File > Save** (Ctrl+S) and **Save As...** (Ctrl+Shift+S)
   write a `.skyfish` file (readable JSON) - the cards and where they sit, value cards with what was
-  typed and their NULL tickbox, the wires, the zoom and the view. Save asks where the first time,
+  typed and their NULL tickbox, and the wires (the zoom and view are recorded too, but a diagram
+  opens fitted to its cards instead: zoomed and centred so every card is in view, never past 100%,
+  and kept that way while the window finishes maximizing - until you zoom or pan yourself; the saved
+  spot was often off at start-up). Save asks where the first time,
   starting in SkyFish's own `diagrams/` folder (not beside the code, which belongs to another project)
   with the code file's name (`stm32PacketDriver.skyfish`; `_2`, `_3`... when a same-named file from
   another project already has one), then just updates it. Save only writes back to a diagram that's in

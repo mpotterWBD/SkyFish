@@ -73,6 +73,7 @@ CARD_GAP = 40            # between cards placed automatically
 SCENE_SIZE = 10_000      # the canvas area cards can be placed and panned in
 ZOOM_MIN, ZOOM_MAX = 0.25, 3.0
 ZOOM_STEP = 1.15         # per scroll-wheel notch
+FIT_MARGIN = 40          # space around the cards when the view fits them
 INDENT_CHARS = 3         # per nesting level in the logic rows
 MAX_CONDITION_CHARS = 56  # longer conditions end in "…"
 MAX_OUTPUT_CHARS = 24
@@ -710,6 +711,7 @@ class CardCanvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)  # zoom toward the pointer
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._cards: dict[tuple[str, int], FunctionCard] = {}
+        self._fit_until_moved = False  # keep fitting the cards on resize until you zoom or pan
         # Value cards and their wires, by (function card key, parameter name).
         self._value_cards: dict[tuple[tuple[str, int], str], tuple[ValueCard, Wire]] = {}
         self._filters = (True, True, True, True)
@@ -869,14 +871,61 @@ class CardCanvas(QGraphicsView):
         self.scale(factor, factor)
         self.zoom_changed.emit(self.zoom)
 
+    def cards_rect(self) -> QRectF:
+        """The area the showing cards and value cards cover (empty when there are none)."""
+        rect = QRectF()
+        for card in self.cards:
+            if card.isVisible():
+                rect = rect.united(card.sceneBoundingRect())
+        for value_card, _ in self._value_cards.values():
+            if value_card.isVisible():
+                rect = rect.united(value_card.sceneBoundingRect())
+        return rect
+
+    def fit_cards(self) -> None:
+        """Zooms and scrolls so every card is in view with a margin - never
+        past 100%, so one small card isn't blown up. Until you zoom or pan
+        yourself, it fits again when the canvas changes size (the window
+        maximizing at start-up), so the cards stay in view."""
+        self._fit_until_moved = True
+        self._fit()
+
+    def _fit(self) -> None:
+        rect = self.cards_rect()
+        if rect.isEmpty():
+            return
+        rect = rect.adjusted(-FIT_MARGIN, -FIT_MARGIN, FIT_MARGIN, FIT_MARGIN)
+        view = self.viewport().rect()
+        zoom = min(view.width() / rect.width(), view.height() / rect.height(), 1.0)
+        self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
+        self.set_zoom(zoom)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.centerOn(rect.center())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        if self._fit_until_moved:
+            self._fit()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._fit_until_moved = False  # you've taken over the view
+        super().mousePressEvent(event)
+
+    def reset_zoom(self) -> None:
+        """Back to 100% (the 100% button and View > Reset Zoom)."""
+        self._fit_until_moved = False
+        self.set_zoom(1.0)
+
     def zoom_by(self, steps: float) -> None:
         """Zooms in (positive) or out by wheel-notch steps around the middle
         of the view - for menu commands, where the mouse isn't on the canvas."""
+        self._fit_until_moved = False  # you've taken over the view
         self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
         self.set_zoom(self.zoom * ZOOM_STEP ** steps)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
 
     def wheelEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._fit_until_moved = False
         steps = event.angleDelta().y() / 120  # one notch = 120
         if steps:
             self.set_zoom(self.zoom * ZOOM_STEP ** steps)

@@ -245,7 +245,7 @@ class MainWindow(QMainWindow):
         for text, shortcut, slot in (
             ("Zoom &In", "Ctrl+=", lambda: self.cards.zoom_by(1)),
             ("Zoom &Out", "Ctrl+-", lambda: self.cards.zoom_by(-1)),
-            ("&Reset Zoom", "Ctrl+0", lambda: self.cards.set_zoom(1.0)),
+            ("&Reset Zoom", "Ctrl+0", self.cards.reset_zoom),
         ):
             action = view_menu.addAction(text)
             action.setShortcut(QKeySequence(shortcut))
@@ -560,8 +560,9 @@ class MainWindow(QMainWindow):
                 if value.null and value_card.null_box is not None:
                     value_card.null_box.setChecked(True)
         self.cards.scene().clearSelection()
-        self.cards.set_zoom(state.zoom)
-        self.cards.centerOn(*state.center)
+        # Show all the cards, rather than the saved view: the saved spot was
+        # often off at start-up, before the window had finished maximizing.
+        self.cards.fit_cards()
         self.diagram_path = path
         notes = [self.message.text(), f"diagram {path.name}"]
         if gone:
@@ -743,7 +744,7 @@ class MainWindow(QMainWindow):
         reset = QPushButton("100%")
         reset.setObjectName("smallButton")
         reset.setToolTip("Reset zoom (the scroll wheel zooms the diagram)")
-        reset.clicked.connect(lambda: self.cards.set_zoom(1.0))
+        reset.clicked.connect(self.cards.reset_zoom)
         header.addWidget(title)
         header.addSpacing(10)
         header.addWidget(self.card_count)
