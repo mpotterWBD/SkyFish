@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | (none)                        |                  | real-mouse click fix, Save to diagrams/, open .skyfish done, committed |
+| Claude  | (none)                        |                  | Open File / Open Project split done, committed |
 | Copilot | (none)                        |                  | B1 sizeof done, committed (fef62db) |
 
 ## Backlog

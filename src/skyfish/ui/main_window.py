@@ -70,10 +70,11 @@ _SHOW_METHODS_KEY = "show_methods"
 _SHOW_VARIABLES_KEY = "show_variables"
 _SHOW_LOGIC_KEY = "show_logic"
 
-_CODE_PATTERNS = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTS))
-# File > Open takes code files and saved diagrams (a .skyfish opens its code with that diagram).
-_FILE_FILTER = (f"Code and diagrams ({_CODE_PATTERNS} *.skyfish);;Supported code ({_CODE_PATTERNS});;"
-                "SkyFish diagrams (*.skyfish);;All files (*)")
+# File > Open File: code. File > Open Project: a saved .skyfish (code + its diagram).
+_FILE_FILTER = (
+    "Supported code (" + " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTS)) + ");;All files (*)"
+)
+_PROJECT_FILTER = "SkyFish projects (*.skyfish)"
 
 
 def _plural(count: int, word: str) -> str:
@@ -213,6 +214,9 @@ class MainWindow(QMainWindow):
         new_action.setShortcut(QKeySequence.New)
         new_action.triggered.connect(self.new_file)
         file_menu.addAction(self.open_action)
+        open_project = file_menu.addAction("Open &Project...")
+        open_project.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        open_project.triggered.connect(self._choose_project)
         self.recent_menu = file_menu.addMenu("Open &Recent")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         file_menu.addSeparator()
@@ -273,7 +277,9 @@ class MainWindow(QMainWindow):
             action = self.recent_menu.addAction(f"&{number}  {path.name}")
             action.setToolTip(str(path))
             action.setStatusTip(str(path))
-            action.triggered.connect(lambda checked=False, p=path: self.open_file(p))
+            # (An older list may hold a .skyfish: that's a project.)
+            opener = self.open_diagram if path.suffix == diagram_file.SUFFIX else self.open_file
+            action.triggered.connect(lambda checked=False, p=path, o=opener: o(p))
 
     def _show_about(self) -> None:
         box = QMessageBox(self)
@@ -343,6 +349,13 @@ class MainWindow(QMainWindow):
         self._fill_list()
         self._show_message(_START_MESSAGE)
 
+    def _choose_project(self) -> None:
+        """File > Open Project: pick a saved .skyfish, starting in SkyFish's diagrams folder."""
+        start = DIAGRAMS_DIR if DIAGRAMS_DIR.is_dir() else (self.current_file.parent if self.current_file else Path())
+        path, _ = QFileDialog.getOpenFileName(self, "Open project", str(start), _PROJECT_FILTER)
+        if path:
+            self.open_diagram(Path(path))
+
     def open_diagram(self, path: Path) -> None:
         """Opens a saved .skyfish: its code file, with this diagram on it."""
         path = Path(path)
@@ -360,12 +373,9 @@ class MainWindow(QMainWindow):
     def open_file(self, path: Path, diagram: tuple | None = None) -> None:
         """Shows path's code on the left, and a summary of its functions and
         methods on the right, with its saved diagram if it has one (or
-        diagram: (path, state) to use a particular one). A .skyfish path opens
-        that diagram with its code."""
+        diagram: (path, state) to use a particular one). It opens whatever it's
+        given as code - a .skyfish opens with File > Open Project instead."""
         path = Path(path)
-        if path.suffix == diagram_file.SUFFIX:
-            self.open_diagram(path)
-            return
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -437,8 +447,7 @@ class MainWindow(QMainWindow):
         DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
         start = (self.diagram_path if self.diagram_path is not None and self._in_diagrams_folder(self.diagram_path)
                  else self.suggested_diagram_path(self.current_file))
-        path, _ = QFileDialog.getSaveFileName(self, "Save diagram", str(start),
-                                              f"SkyFish diagram (*{diagram_file.SUFFIX})")
+        path, _ = QFileDialog.getSaveFileName(self, "Save project", str(start), _PROJECT_FILTER)
         if path:
             self.write_diagram(Path(path))
 

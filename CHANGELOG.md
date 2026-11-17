@@ -19,8 +19,8 @@ First version.
   headless pytest. `launch_skyfish.bat` (the Smart-App-Control-safe launcher, like oilIQ's) and a VS
   Code Run and Debug configuration.
 - **Menu bar**: **File** (New Ctrl+N - a blank window: no code, empty list and diagram, and a blank
-  start next time; Open File... Ctrl+O, Open Recent - the last 8 files, newest first - and
-  Exit), **View** (Functions / Methods / Variables / Logic, kept in step with the panel's checkboxes;
+  start next time; Open File... Ctrl+O - code; Open Project... Ctrl+Shift+O - a saved `.skyfish`;
+  Open Recent - the last 8 files, newest first; Save / Save As; and Exit), **View** (Functions / Methods / Variables / Logic, kept in step with the panel's checkboxes;
   Zoom In Ctrl+=, Zoom Out Ctrl+-, Reset Zoom Ctrl+0) and **Help** (About SkyFish).
 - **Window**: across the top, the window's full width, the SkyFish logo with the version beside it,
   then the menu bar under it. Below, two columns with a draggable divider: the code viewer and the
@@ -86,8 +86,9 @@ First version.
   another project already has one), then just updates it. Save only writes back to a diagram that's in
   `diagrams/`; one opened from anywhere else (the Desktop, beside the code) makes Save ask, starting in
   `diagrams/`; Save As always starts there. Opening a code file brings its diagram back: the file it
-  was last saved to, else one in `diagrams/` made for it, else one beside the code. **File > Open** (and
-  Open Recent) on a `.skyfish` opens its code file with that diagram, instead of showing the JSON.
+  was last saved to, else one in `diagrams/` made for it, else one beside the code. **File > Open
+  Project** (Ctrl+Shift+O) opens a `.skyfish` - its code file with that diagram - starting in
+  `diagrams/`; **Open File** stays code only.
   A card's function is matched by name in today's code, so an edited function's card shows its current
   code; a function that's gone (renamed or deleted) keeps its card, drawn from the saved code with a red
   X across everything below its title bar, no longer tied to the code. Value cards whose input is gone

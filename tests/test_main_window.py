@@ -489,7 +489,8 @@ def _items(menu):
 def test_menu_bar(make_window):
     window = make_window()
     assert [a.text().replace("&", "") for a in window.menu_bar.actions()] == ["File", "View", "Help"]
-    assert _items(_menu(window, "File")) == ["New", "Open File...", "Open Recent", "Save", "Save As...", "Exit"]
+    assert _items(_menu(window, "File")) == ["New", "Open File...", "Open Project...", "Open Recent",
+                                             "Save", "Save As...", "Exit"]
     assert window.open_action.shortcut().toString() == "Ctrl+O"
     assert _items(_menu(window, "View")) == [
         "Functions", "Methods", "Variables", "Logic", "Zoom In", "Zoom Out", "Reset Zoom"]
@@ -1039,7 +1040,7 @@ def test_opening_a_skyfish_file_opens_its_code_and_diagram(make_window, tmp_path
     path = _saved_diagram(make_window, tmp_path)
     window = make_window()
     window._settings.clear()  # no remembered link: it has to come from the .skyfish itself
-    window.open_file(tmp_path / "drv.skyfish")  # what File > Open / Open Recent do with it
+    window.open_diagram(tmp_path / "drv.skyfish")  # File > Open Project
     assert window.current_file == path  # the code file, not the JSON
     assert window.viewer.toPlainText() == path.read_text()
     assert sorted(c.function.name for c in window.cards.cards) == ["addKeyValuePair", "helper"]
@@ -1071,3 +1072,26 @@ def test_save_goes_to_the_diagrams_folder(make_window, tmp_path, monkeypatch):
     assert len(asked) == 1
     window.save_diagram_as()  # Save As always asks, starting there
     assert asked[-1] == str(mw.DIAGRAMS_DIR / "drv.skyfish")
+
+
+def test_open_file_and_open_project_are_separate(make_window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from skyfish.ui import main_window as mw
+    path = _saved_diagram(make_window, tmp_path)
+    project = tmp_path / "drv.skyfish"
+    window = make_window()
+
+    # Open File opens what it's given as code - a .skyfish shows as its JSON text.
+    window.open_file(project)
+    assert window.viewer.toPlainText().startswith("{")
+    assert window.cards.cards == []
+
+    # Open Project starts in diagrams/ and opens the code with its diagram.
+    asked = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda parent, title, start, filters: (asked.append((title, start, filters)), (str(project), filters))[1])
+    mw.DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
+    window._choose_project()
+    assert asked == [("Open project", str(mw.DIAGRAMS_DIR), "SkyFish projects (*.skyfish)")]
+    assert window.current_file == path
+    assert sorted(c.function.name for c in window.cards.cards) == ["addKeyValuePair", "helper"]
