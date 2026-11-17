@@ -78,8 +78,10 @@ First version.
 - **Saving diagrams** (`diagram_file.py`): **File > Save** (Ctrl+S) and **Save As...** (Ctrl+Shift+S)
   write a `.skyfish` file (readable JSON) - the cards and where they sit, value cards with what was
   typed and their NULL tickbox, the wires, the zoom and the view. Save asks where the first time,
-  suggesting a file beside the code with the same name (`stm32PacketDriver.skyfish`), then just updates
-  it. Opening a code file brings its diagram back (the file it was last saved to, or the one beside it).
+  starting in SkyFish's own `diagrams/` folder (not beside the code, which belongs to another project)
+  with the code file's name (`stm32PacketDriver.skyfish`; `_2`, `_3`... when a same-named file from
+  another project already has one), then just updates it. Opening a code file brings its diagram back:
+  the file it was last saved to, else one in `diagrams/` made for it, else one beside the code.
   A card's function is matched by name in today's code, so an edited function's card shows its current
   code; a function that's gone (renamed or deleted) keeps its card, drawn from the saved code with a red
   X across everything below its title bar, no longer tied to the code. Value cards whose input is gone

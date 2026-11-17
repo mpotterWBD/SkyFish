@@ -54,7 +54,11 @@ LIST_WIDTH_PX = 240  # the functions list's starting width (layout knob)
 
 # The logo in the window's top-left corner: SkyFish/assets/skyfish_logo.png
 # (made by assets/make_logo.py), loaded from there so a regenerated logo shows up.
-LOGO_PATH = Path(__file__).resolve().parents[3] / "assets" / "skyfish_logo.png"
+PROJECT_DIR = Path(__file__).resolve().parents[3]  # the SkyFish folder
+LOGO_PATH = PROJECT_DIR / "assets" / "skyfish_logo.png"
+# Where File > Save puts diagrams: a folder inside the SkyFish project, not
+# beside the code (which belongs to another project). Tests point it elsewhere.
+DIAGRAMS_DIR = PROJECT_DIR / "diagrams"
 LOGO_HEIGHT_PX = 96  # layout knob
 
 # List-row data roles: the row's line (for jumping to it) and, on function
@@ -393,11 +397,13 @@ class MainWindow(QMainWindow):
             self.save_diagram_as()
 
     def save_diagram_as(self) -> None:
-        """File > Save As: always asks where, suggesting beside the code."""
+        """File > Save As: always asks where, starting in SkyFish's diagrams
+        folder (or where this diagram was last saved)."""
         if self.current_file is None:
             self._show_message("Open a code file first - a diagram is saved with the code it's about.")
             return
-        start = self.diagram_path or diagram_file.default_path(self.current_file)
+        DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
+        start = self.diagram_path or self.suggested_diagram_path(self.current_file)
         path, _ = QFileDialog.getSaveFileName(self, "Save diagram", str(start),
                                               f"SkyFish diagram (*{diagram_file.SUFFIX})")
         if path:
@@ -448,12 +454,32 @@ class MainWindow(QMainWindow):
         return diagram_file.DiagramState(diagram_file.relative_code_file(path, self.current_file),
                                          self.cards.zoom, (centre.x(), centre.y()), cards)
 
+    def suggested_diagram_path(self, code_file: Path) -> Path:
+        """The name Save suggests in the diagrams folder: the code file's name
+        (stm32PacketDriver.skyfish), or name_2, name_3... if that's taken by a
+        diagram of a different file with the same name."""
+        stem = Path(code_file).stem
+        candidate, n = DIAGRAMS_DIR / f"{stem}{diagram_file.SUFFIX}", 2
+        while candidate.exists() and not self._is_diagram_of(candidate, code_file):
+            candidate, n = DIAGRAMS_DIR / f"{stem}_{n}{diagram_file.SUFFIX}", n + 1
+        return candidate
+
+    @staticmethod
+    def _is_diagram_of(path: Path, code_file: Path) -> bool:
+        try:
+            return diagram_file.code_file_for(path, diagram_file.load(path)) == Path(code_file).resolve()
+        except diagram_file.DiagramFileError:
+            return False
+
     def _load_diagram_for(self, code_path: Path) -> None:
         """Brings back code_path's diagram, if it has one: the file it was last
-        saved to, or one beside it with the same name."""
+        saved to, else one in the diagrams folder made for it, else one beside
+        the code (where earlier versions saved)."""
         code_path = Path(code_path).resolve()
         remembered = self._diagram_files().get(str(code_path))
-        for candidate in ([Path(remembered)] if remembered else []) + [diagram_file.default_path(code_path)]:
+        in_folder = sorted(DIAGRAMS_DIR.glob(f"{code_path.stem}*{diagram_file.SUFFIX}")) if DIAGRAMS_DIR.is_dir() else []
+        candidates = ([Path(remembered)] if remembered else []) + in_folder + [diagram_file.default_path(code_path)]
+        for candidate in candidates:
             if not candidate.is_file():
                 continue
             try:

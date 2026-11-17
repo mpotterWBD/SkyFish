@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | (none)                        |                  | Ctrl+click fix, Save/Save As, card X done, committed |
+| Claude  | (none)                        |                  | diagrams/ save folder done, committed |
 | Copilot | (none)                        |                  | B1 sizeof done, committed (fef62db) |
 
 ## Backlog

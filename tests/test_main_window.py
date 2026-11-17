@@ -9,9 +9,12 @@ from skyfish.version import APP_VERSION
 
 
 @pytest.fixture
-def make_window(tmp_path):
+def make_window(tmp_path, monkeypatch):
     """Builds MainWindows that remember files in a throwaway .ini, never the
-    real per-user settings. Windows made by one test share that .ini."""
+    real per-user settings, and save diagrams to a throwaway folder, never
+    SkyFish's real diagrams/. Windows made by one test share both."""
+    from skyfish.ui import main_window as mw
+    monkeypatch.setattr(mw, "DIAGRAMS_DIR", tmp_path / "diagrams")
     windows = []
 
     def make() -> MainWindow:
@@ -966,3 +969,34 @@ def test_save_as_needs_a_code_file(make_window):
     window = make_window()
     window.save_diagram_as()
     assert "Open a code file first" in window.message.text()
+
+
+def test_diagrams_go_in_skyfishs_diagrams_folder(make_window, tmp_path):
+    from skyfish.ui import main_window as mw
+    project_a, project_b = tmp_path / "OQS", tmp_path / "AutoFilter"
+    project_a.mkdir()
+    project_b.mkdir()
+    code_a, code_b = project_a / "drv.c", project_b / "drv.c"  # same name, two projects
+    code_a.write_text(SAVE_SOURCE)
+    code_b.write_text(SAVE_SOURCE)
+
+    window = make_window()
+    window.open_file(code_a)
+    first = window.suggested_diagram_path(code_a)
+    assert first == mw.DIAGRAMS_DIR / "drv.skyfish"  # in the diagrams folder, not beside the code
+    _add(window, "helper")
+    mw.DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
+    window.write_diagram(first)
+
+    # The other project's drv.c doesn't overwrite it.
+    assert window.suggested_diagram_path(code_b) == mw.DIAGRAMS_DIR / "drv_2.skyfish"
+    assert window.suggested_diagram_path(code_a) == first  # its own diagram: same file again
+
+    # Found again from the folder even without the remembered link (fresh settings).
+    window2 = make_window()
+    window2._settings.clear()
+    window2.open_file(code_a)
+    assert [c.function.name for c in window2.cards.cards] == ["helper"]
+    window3 = make_window()
+    window3.open_file(code_b)
+    assert window3.cards.cards == []  # not the other project's diagram
