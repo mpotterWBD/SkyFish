@@ -1329,6 +1329,36 @@ def test_ctrl_click_a_call_or_a_local_on_a_card_shows_its_value(make_window, tmp
     assert card.toggle_value_overlay("bogus") == "bogus: not a variable or a call on this card"
 
 
+def test_the_arrow_beside_a_card_opens_its_memory_matrix(make_window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from skyfish.ui.memory_matrix import EMPTY, ROW_COUNT, MemoryMatrix, address_text
+    window = _step_window(make_window, tmp_path)
+    card = _add(window, "add")
+    view = window.cards
+
+    def click_arrow():
+        point = view.mapFromScene(card.mapToScene(card.memory_tab_rect().center()))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, point)
+
+    assert not card.memory_open and card.memory is None
+    shut_arrow = card.memory_tab_rect()
+    assert shut_arrow.left() > card.size[0]  # just right of the card
+    click_arrow()
+    matrix = card.memory
+    assert card.memory_open and isinstance(matrix, MemoryMatrix) and matrix.isVisible()
+    assert matrix.pos().x() > card.size[0] and matrix.boundingRect().height() > card.size[1]  # card + step bar
+    assert card.memory_tab_rect().left() > matrix.pos().x() + matrix.width  # the arrow moves out past it
+    assert matrix.memory == {} and EMPTY == "--"  # nothing in it yet
+    assert address_text(0) == "0x0000" and address_text(0xFFFF) == "0xFFFF"
+    matrix.scroll_by(-5)
+    assert matrix.first_row == 0
+    matrix.scroll_by(10 ** 6)
+    assert matrix.first_row == ROW_COUNT - matrix.visible_rows  # stops at 0xFFF8
+    click_arrow()  # shut again
+    assert not card.memory_open and not matrix.isVisible() and card.memory_tab_rect() == shut_arrow
+
+
 def test_ctrl_click_a_non_standard_call_is_out_of_scope(make_window, tmp_path):
     path = tmp_path / "hal.c"
     path.write_text("int wait(int ms) {\n    int t = HAL_GetTick();\n    return t;\n}\n")

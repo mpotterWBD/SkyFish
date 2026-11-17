@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | (none)                        |                  | call lines as code; Ctrl+click locals and calls - done, committed |
+| Claude  | (none)                        |                  | memory matrix panel (ui/memory_matrix.py, empty for now) - done, committed |
 | Copilot | (none)                        |                  | B1 sizeof done, committed (fef62db) |
 
 ## Backlog

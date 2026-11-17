@@ -83,6 +83,12 @@ First version.
   it; not stepping, everything the run worked out shows. A value showing for a whole call covers
   anything shown inside it. A call to something that isn't standard C (HAL, your other files) says
   "out of scope for now". Overlays skip text inside quotes.
+- **Memory matrix beside each card**: a tall arrow on a card's right side opens a memory panel
+  attached to it (as tall as the card and its step bar); the arrow moves past the panel and points back
+  to shut it. Deliberately abstract, not the chip's real memory map: 16-bit addresses from `0x0000` to
+  `0xFFFF`, 8 bytes a row in hex, then the same bytes as text. The scroll wheel over it scrolls the rows
+  instead of zooming. Empty for now (every byte `--`); the card's variables go in later, and cards
+  tied together will share one matrix.
 - **Step-through on every card**: a bar under each card (not crossed-out ones, and only while Logic is
   ticked) with **|◀ ◀ ▶ ▶|**. A step is one card line: ▶ moves to the next card line the run passes, ◀
   back one, ▶| straight to where the function leaves, |◀ back to the front of the card. An if isn't

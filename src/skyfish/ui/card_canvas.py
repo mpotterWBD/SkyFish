@@ -44,6 +44,7 @@ from skyfish.ui.highlighter import FUNCTION as FUNCTION_FORMAT
 from skyfish.ui.highlighter import colour_spans
 from skyfish.ui.card_style import CLOSE_GAP, CLOSE_SIZE
 from skyfish.ui.card_style import draw_close as _draw_close
+from skyfish.ui.memory_matrix import MemoryMatrix
 from skyfish.ui.value_card import ValueCard, Wire
 
 # Look - same dark palette as theme.qss.
@@ -93,6 +94,8 @@ MAX_INPUT_VALUE_CHARS = 32  # a typed-in value shown on its input's row
 WIRE_GAP = 14            # between a row's text and its wire, and around lanes
 LANE_STEP = 10           # between the vertical wires of different outputs
 PORT_RADIUS = 4.5
+MEMORY_GAP = 10          # between the card (its output dots) and the memory arrow / matrix
+MEMORY_TAB_WIDTH = 18    # the arrow on the card's right side that opens the memory matrix
 
 
 def _card_font() -> QFont:
@@ -243,6 +246,10 @@ class FunctionCard(QGraphicsObject):
         self._step_path: list | None = None  # worked out when needed; None = out of date
         self.step_note = ""                   # why the run can't go on, when it can't
         self._input_drag: tuple[str, object] | None = None  # (parameter name, the line being drawn)
+        # The memory matrix beside the card (memory_matrix.py), opened and
+        # closed by the arrow on the card's right side; made on first open.
+        self.memory: MemoryMatrix | None = None
+        self.memory_open = False
         self._layout()
 
     @property
@@ -447,6 +454,7 @@ class FunctionCard(QGraphicsObject):
         self._runs = runs
         if self.linked_run is not None and self.linked_run >= len(runs):
             self.linked_run = None
+        self._place_memory()
 
     # --- clicking words -------------------------------------------------
 
@@ -742,6 +750,10 @@ class FunctionCard(QGraphicsObject):
         return pos.y() <= self._title_h
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.LeftButton and self.memory_tab_rect().contains(event.pos()):
+            self.toggle_memory()
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and self.close_rect().contains(event.pos()):
             if self.on_close is not None:
                 self.on_close(self)
@@ -829,7 +841,7 @@ class FunctionCard(QGraphicsObject):
             if rect.contains(event.pos()):
                 QToolTip.showText(QCursor.pos(), value)  # the whole value, when it's cut short
                 break
-        if self.close_rect().contains(event.pos()) or (
+        if self.close_rect().contains(event.pos()) or self.memory_tab_rect().contains(event.pos()) or (
                 self.has_step_bar() and any(r.contains(event.pos()) for _, r in self.step_buttons())):
             self.setCursor(Qt.PointingHandCursor)
         elif not self.stale and self.input_at(event.pos()) is not None:
@@ -841,6 +853,52 @@ class FunctionCard(QGraphicsObject):
         else:
             self.setCursor(Qt.ArrowCursor)
 
+    # --- the memory matrix ------------------------------------------------
+
+    def _full_height(self) -> float:
+        """The card with its step bar."""
+        return self._size[1] + (STEP_BAR_HEIGHT if self.has_step_bar() else 0)
+
+    def memory_tab_rect(self) -> QRectF:
+        """The arrow on the card's right side - beside the card when the
+        matrix is shut, beside the matrix when it's open."""
+        x = self._size[0] + MEMORY_GAP
+        if self.memory_open and self.memory is not None:
+            x += self.memory.width + MEMORY_GAP
+        return QRectF(x, self._title_h, MEMORY_TAB_WIDTH, self._full_height() - self._title_h)
+
+    def toggle_memory(self) -> None:
+        """Opens (or shuts) the memory matrix beside the card."""
+        self.prepareGeometryChange()
+        self.memory_open = not self.memory_open
+        if self.memory_open and self.memory is None:
+            self.memory = MemoryMatrix(self)
+        if self.memory is not None:
+            self.memory.setVisible(self.memory_open)
+        self._place_memory()
+        self.update()
+        self._moved()
+
+    def _place_memory(self) -> None:
+        if getattr(self, "memory", None) is not None:
+            self.memory.setPos(self._size[0] + MEMORY_GAP, 0)
+            self.memory.set_height(self._full_height())
+
+    def _paint_memory_tab(self, painter: QPainter) -> None:
+        """A tall, thin chevron: > to open, < to shut."""
+        rect = self.memory_tab_rect()
+        pen = QPen(_STEP_ICON, 2.2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        inset = min(40.0, rect.height() / 4)
+        top, bottom, mid = rect.top() + inset, rect.bottom() - inset, rect.center().y()
+        left, right = rect.left() + 4, rect.right() - 4
+        if self.memory_open:
+            left, right = right, left  # points back at the card: shut
+        painter.drawPolyline([QPointF(left, top), QPointF(right, mid), QPointF(left, bottom)])
+
     # --- painting -------------------------------------------------------
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - Qt override
@@ -848,7 +906,8 @@ class FunctionCard(QGraphicsObject):
         if self.has_step_bar():
             height += STEP_BAR_HEIGHT  # the step-through bar hangs under the card
         # +border, and the port dots that sit half outside the edges (bigger when lit).
-        return QRectF(-PORT_RADIUS - 4, -1, width + 2 * PORT_RADIUS + 8, height + 2)
+        right = max(width + PORT_RADIUS + 4, self.memory_tab_rect().right() + 2)
+        return QRectF(-PORT_RADIUS - 4, -1, right + PORT_RADIUS + 4, height + 2)
 
     def _draw_spans(self, painter: QPainter, x: float, y_centre: float, spans) -> None:
         top = y_centre - self._line_h / 2
@@ -999,6 +1058,7 @@ class FunctionCard(QGraphicsObject):
         if self.has_step_bar():
             self._paint_step_bar(painter)
         _draw_close(painter, self.close_rect())
+        self._paint_memory_tab(painter)
         if self.stale:
             # Gone from the code: a big X across everything but the title bar.
             width, height = self._size
@@ -1291,6 +1351,8 @@ class CardCanvas(QGraphicsView):
         for card in self.cards:
             if card.isVisible():
                 rect = rect.united(card.sceneBoundingRect())
+                if card.memory_open and card.memory is not None:
+                    rect = rect.united(card.memory.sceneBoundingRect())
         for value_card, _ in self._value_cards.values():
             if value_card.isVisible():
                 rect = rect.united(value_card.sceneBoundingRect())
@@ -1341,6 +1403,11 @@ class CardCanvas(QGraphicsView):
     def wheelEvent(self, event) -> None:  # noqa: N802 - Qt override
         self._fit_until_moved = False
         steps = event.angleDelta().y() / 120  # one notch = 120
+        item = self.itemAt(event.position().toPoint())
+        if isinstance(item, MemoryMatrix):
+            item.scroll_by(round(-steps * 3))  # over the memory matrix: scroll its rows, don't zoom
+            event.accept()
+            return
         if steps:
             self.set_zoom(self.zoom * ZOOM_STEP ** steps)
         event.accept()
