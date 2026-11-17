@@ -136,5 +136,12 @@ First version.
   arguments reach, so they're forgotten too. A contract that can't answer now blames the exact
   argument it needed (`CallEffect.blocked`) - snprintf never blames its buffer. `Action` also
   carries `context` ("in loop" / "in switch", like `Exit.context`).
+- **sizeof resolves** (B1): `sizeof(name)` from the name's declared type (`char number[12]` ->
+  12, `uint16_t` -> 2, pointers -> 4; an array parameter is a pointer), `sizeof(type)` from the
+  32-bit ARM sizes values.py uses, and an array sized by a #define (`uint8_t[TX_MAX]`) resolves
+  when the define's value is known. Structs, unknown typedefs and sizeof of an expression stay
+  unknown, as written. `evaluate_condition` / `compute_expression` take an optional `types`
+  mapping ({name: declared type}); `simulate` fills it from the function's variables - so the
+  real `addKeyValuePair` now runs every step to its output.
 - **Remembered between sessions** (per user, `QSettings`): the last file (reopened at start-up if it's
   still there), the recent files, the panel dividers, and the checkboxes.

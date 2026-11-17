@@ -133,6 +133,38 @@ def test_else_rows_and_bad_text_come_back_quietly_unknown():
     assert evaluate_condition("if while (", {}) == Evaluation(None)
 
 
+def test_sizeof_of_declared_variables_and_types():
+    # B1: sizeof(name) from the declared type, sizeof(type) from the ARM sizes.
+    types = {"number": "char[12]", "crc": "uint16_t", "name": "const char *",
+             "buf": "uint8_t[TX_MAX]", "cb": "void (*)(int)", "pt": "struct Point"}
+    assert evaluate_condition("sizeof(number) == 12", {}, types) == Evaluation(True)
+    assert evaluate_condition("sizeof(crc) == 2", {}, types) == Evaluation(True)
+    assert evaluate_condition("sizeof(name) == 4", {}, types) == Evaluation(True)  # a pointer
+    assert evaluate_condition("sizeof(cb) == 4", {}, types) == Evaluation(True)    # likewise
+    assert evaluate_condition("sizeof number == 12", {}, types) == Evaluation(True)
+    # an array sized by a #define resolves when the define's value is in
+    assert evaluate_condition("sizeof(buf) == 8", {"TX_MAX": 8}, types) == Evaluation(True)
+    assert evaluate_condition("sizeof(buf) == 8", {}, types) == Evaluation(None, ("sizeof(buf)",))
+    # types it won't guess at stay unknown, as written
+    assert evaluate_condition("sizeof(pt) > 0", {}, types) == Evaluation(None, ("sizeof(pt)",))
+
+
+def test_sizeof_of_type_names():
+    assert evaluate_condition("sizeof(uint16_t) == 2", {}) == Evaluation(True)
+    assert evaluate_condition("sizeof(int) == 4", {}) == Evaluation(True)
+    assert evaluate_condition("sizeof(char[12]) == 12", {}) == Evaluation(True)
+    assert evaluate_condition("sizeof(double) == 8", {}) == Evaluation(True)
+    assert evaluate_condition("sizeof(uint32_t *) == 4", {}) == Evaluation(True)
+
+
+def test_sizeof_of_expressions_and_unknown_names_stays_unknown():
+    assert evaluate_condition("sizeof(buf[0]) == 1", {}) == Evaluation(None, ("sizeof(buf[0])",))
+    assert evaluate_condition("sizeof(s->len) == 2", {}) == Evaluation(None, ("sizeof(s->len)",))
+    # no types mapping passed - today's behaviour, unknown as written
+    assert evaluate_condition("sizeof(number) == 12", {}) \
+        == Evaluation(None, ("sizeof(number)",))
+
+
 @pytest.mark.parametrize("condition,values,expected", [
     # The kind of guards Mike's firmware actually has.
     ("length < 2 || length > TX_MAX", {"length": 1, "TX_MAX": 64}, True),

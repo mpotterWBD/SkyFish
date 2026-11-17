@@ -211,3 +211,65 @@ int f(const char *name, int n) {
     assert "name" not in trace.state       # a char * the callee could write through
     assert trace.state["n"] == 2           # passed by value - safe
     assert trace.output == "1"             # the walk carries on where it's sure
+
+
+ADD_KEY_VALUE_PAIR = """
+bool addKeyValuePair(char *dataCSV, uint16_t size, const char *KEY, int VALUE) {
+    char number[12];
+    size_t used;
+    size_t pairLength;
+
+    if(dataCSV == NULL || KEY == NULL || size == 0) {
+        return false;
+    }
+
+    snprintf(number, sizeof(number), "%d", VALUE);
+
+    used = strlen(dataCSV);
+    pairLength = strlen(KEY) + 1 + strlen(number) + 1;
+
+    if(used + pairLength + 1 > size) {
+        return false;
+    }
+
+    snprintf(dataCSV + used, size - used, "%s:%s,", KEY, number);
+    return true;
+}
+"""
+
+
+def test_b1_addkeyvaluepair_runs_end_to_end():
+    # The Backlog's done-when: the real stm32PacketDriver.c function, every
+    # step resolved - sizeof(number) comes from char number[12].
+    f = function_named(ADD_KEY_VALUE_PAIR, "addKeyValuePair")
+    trace = simulate(f, {"dataCSV": "", "size": 64, "KEY": "TEMP", "VALUE": -42})
+    assert trace.output == "true"
+    statuses = {step.status for step in trace.steps.values()}
+    assert UNKNOWN not in statuses          # every step resolved
+    fill = actions(f.flow)[0]               # snprintf(number, sizeof(number), "%d", VALUE)
+    assert trace.steps[fill.span].changes == {"number": "-42"}
+    assert trace.state["used"] == 0
+    assert trace.state["pairLength"] == 9   # "TEMP" + ':' + "-42" + ','
+    last = actions(f.flow)[-1]              # snprintf(dataCSV + used, size - used, ...)
+    assert trace.steps[last.span].changes["dataCSV + used"] == "TEMP:-42,"
+
+
+def test_b1_addkeyvaluepair_too_small_returns_false():
+    f = function_named(ADD_KEY_VALUE_PAIR, "addKeyValuePair")
+    trace = simulate(f, {"dataCSV": "", "size": 8, "KEY": "TEMP", "VALUE": -42})
+    assert trace.output == "false"          # 0 + 9 + 1 > 8
+    guard = f.flow[4].branches[0]           # if (used + pairLength + 1 > size)
+    assert trace.steps[guard.span].status == TAKEN
+
+
+def test_an_array_parameter_is_a_pointer_to_sizeof():
+    text = """
+int f(uint8_t buf[], int n) {
+    if (sizeof(buf) == 4) {
+        return 1;
+    }
+    return 0;
+}
+"""
+    f = function_named(text, "f")
+    assert simulate(f, {"n": 0}).output == "1"

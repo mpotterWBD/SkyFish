@@ -1,4 +1,4 @@
-"""Runs a function top to bottom with the card values, carrying state.
+﻿"""Runs a function top to bottom with the card values, carrying state.
 
 The evaluator answers one condition at a time; this walks the whole flow the
 way the hardware would run it: locals pick up their initial values, each
@@ -21,12 +21,13 @@ No Qt here, so it can be tested on its own.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Mapping
 
 from skyfish.analysis import stdlib_c
 from skyfish.analysis.evaluate import compute_expression, evaluate_condition
-from skyfish.analysis.functions import LOCAL, FunctionInfo
+from skyfish.analysis.functions import LOCAL, PARAMETER, FunctionInfo
 from skyfish.analysis.logic import END, Action, Exit, Forever, IfChain, Span
 
 # Step statuses - what happened at one flow node on this run.
@@ -62,10 +63,24 @@ def simulate(function: FunctionInfo, inputs: Mapping[str, object],
              defines: Mapping[str, object] | None = None) -> Trace:
     """Run function with the value cards' inputs (and the file's #defines
     underneath them - an input the operator typed wins)."""
-    walk = _Walk({**(defines or {}), **inputs})
+    walk = _Walk({**(defines or {}), **inputs}, _declared_types(function))
     walk.seed(function)
     walk.run(function.flow, _LIVE)
     return walk.trace(function)
+
+
+def _declared_types(function: FunctionInfo) -> dict[str, str]:
+    """Each variable's declared type as written, for sizeof(name). An array
+    parameter (uint8_t buf[]) really arrives as a pointer, so it's one."""
+    types: dict[str, str] = {}
+    for variable in function.variables:
+        if not variable.type:
+            continue
+        declared = variable.type
+        if variable.kind == PARAMETER and re.search(r"\[[^\]]*\]\s*$", declared):
+            declared = re.sub(r"\s*\[[^\]]*\]\s*$", " *", declared)
+        types[variable.name] = declared
+    return types
 
 
 # Internal walk modes: definitely running, only possibly running (an
@@ -78,8 +93,9 @@ _POISON = object()
 
 
 class _Walk:
-    def __init__(self, state: dict) -> None:
+    def __init__(self, state: dict, types: Mapping[str, str] | None = None) -> None:
         self.state = state
+        self.types = dict(types or {})  # declared types, for sizeof(name)
         self.steps: dict[Span, Step] = {}
         self.exited: str | None = None   # the Exit.value the walk surely left by
         self.maybe_exited = False        # a return that only might have happened
@@ -93,7 +109,7 @@ class _Walk:
         for variable in sorted(function.variables, key=lambda v: v.line):
             if variable.kind != LOCAL or not variable.initial or variable.name in self.state:
                 continue
-            result = compute_expression(variable.initial, self.known())
+            result = compute_expression(variable.initial, self.known(), self.types)
             if result.known:
                 self.state[variable.name] = result.value
 
@@ -150,7 +166,7 @@ class _Walk:
             return
         values, blockers = [], []
         for argument in action.args:
-            result = compute_expression(argument, self.known())
+            result = compute_expression(argument, self.known(), self.types)
             values.append(result.value if result.known else stdlib_c.UNKNOWN)
             blockers.append(() if result.known else (result.unresolved or (argument,)))
         effect = stdlib_c.call_effect(action.call, values)
@@ -172,7 +188,7 @@ class _Walk:
                 self.state[written] = contents if sure else _POISON
 
     def _assign(self, action: Action, step: Step, sure: bool) -> None:
-        result = compute_expression(action.expression, self.known())
+        result = compute_expression(action.expression, self.known(), self.types)
         if sure and result.known:
             self.state[action.target] = result.value
             step.changes[action.target] = result.value
@@ -195,7 +211,7 @@ class _Walk:
                 goes = None if unsure else True
                 unresolved: tuple[str, ...] = ()
             else:
-                result = evaluate_condition(branch.condition, self.known())
+                result = evaluate_condition(branch.condition, self.known(), self.types)
                 # True only helps if every earlier undecided branch was false.
                 goes = None if (unsure and result.value) else result.value
                 unresolved = result.unresolved
@@ -220,7 +236,7 @@ class _Walk:
             return mode
         step = Step(TAKEN)
         if node.value != END:
-            result = compute_expression(node.value, self.known())
+            result = compute_expression(node.value, self.known(), self.types)
             step.returned, step.known = result.value, result.known
             if not result.known:
                 step.unresolved = result.unresolved or (node.value,)

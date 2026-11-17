@@ -24,7 +24,7 @@ every task and before every commit.
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
 | Claude  | (none)                        |                  | value overlay done, committed |
-| Copilot | (none)                        |                  | simulate() runner done, committed (80f8849) |
+| Copilot | src/skyfish/analysis/evaluate.py, src/skyfish/analysis/simulate.py; tests/test_evaluate.py, tests/test_simulate.py | 2026-11-16 20:09 | in progress - B1 sizeof (CHANGELOG is yours - my line will be on the board) |
 
 ## Backlog
 
@@ -33,7 +33,7 @@ open item; mark it yours here and claim its files before starting. Build to
 the interface given; post any change on the board and wait before building
 it. Mark done (with the commit) when it's in.
 
-### B1 - sizeof of declared variables and types  [open]
+### B1 - sizeof of declared variables and types  [taken - Copilot, 20:09]
 
 Why: `addKeyValuePair` stops at its first line - `snprintf(number,
 sizeof(number), "%d", VALUE)` is unknown because `sizeof(number)` is

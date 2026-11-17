@@ -1,4 +1,4 @@
-"""Whether an if condition is true, false or unknown, given input values.
+﻿"""Whether an if condition is true, false or unknown, given input values.
 
 The value cards hold Python values for a function's inputs (see values.py:
 int, float, bool, str for char *, bytes for uint8_t *, None for NULL). This
@@ -36,7 +36,8 @@ from tree_sitter import Language, Node, Parser
 import tree_sitter_c
 
 from skyfish.analysis import stdlib_c
-from skyfish.analysis.values import BOOLEAN, INTEGER, REAL, value_type_for
+from skyfish.analysis.values import (BOOLEAN, INTEGER, REAL, _C_BOOLS, _C_INTEGERS,
+                                     value_type_for)
 
 _PARSER = Parser(Language(tree_sitter_c.language()))
 
@@ -47,7 +48,10 @@ _BUILTINS = {"NULL": None}
 # Node types that would need the program's memory to answer - a value card
 # can't provide them, so they're reported as written and left unknown.
 _OPAQUE = ("field_expression", "subscript_expression",
-           "sizeof_expression", "offsetof_expression", "generic_expression")
+           "offsetof_expression", "generic_expression")
+
+_POINTER_BYTES = 4  # 32-bit ARM, matching values.py's integer sizes
+_REAL_BYTES = {"float": 4, "double": 8, "long double": 8}
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,14 @@ class _Unknown:
 
 
 @dataclass(frozen=True)
+class _Scope:
+    """What the evaluation sees: input values, and (for sizeof) each known
+    name's declared type as written ({"number": "char[12]"})."""
+    values: Mapping[str, object]
+    types: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class Computation:
     """What an expression comes to with the values given."""
     known: bool
@@ -75,25 +87,29 @@ class Computation:
     unresolved: tuple[str, ...] = ()  # as in Evaluation; filled when not known
 
 
-def evaluate_condition(condition: str, values: Mapping[str, object]) -> Evaluation:
+def evaluate_condition(condition: str, values: Mapping[str, object],
+                       types: Mapping[str, str] | None = None) -> Evaluation:
     """Evaluate a C condition as written on a card ("" - an else row - and
-    anything that doesn't parse come back unknown with nothing to report)."""
+    anything that doesn't parse come back unknown with nothing to report).
+    types is each name's declared type as written ({"number": "char[12]"}),
+    for sizeof(name) - leave it out for today's behaviour."""
     expression = _parse(condition)
     if expression is None:
         return Evaluation(None)
-    result = _eval(expression, values)
+    result = _eval(expression, _Scope(values, types or {}))
     if isinstance(result, _Unknown):
         return Evaluation(None, tuple(dict.fromkeys(result.names)))
     return Evaluation(_truth(result))
 
 
-def compute_expression(expression: str, values: Mapping[str, object]) -> Computation:
+def compute_expression(expression: str, values: Mapping[str, object],
+                       types: Mapping[str, str] | None = None) -> Computation:
     """The value of a C expression - an Action's right-hand side, a #define's
-    body - rather than just which way it leans."""
+    body - rather than just which way it leans. types as evaluate_condition's."""
     node = _parse(expression)
     if node is None:
         return Computation(False)
-    result = _eval(node, values)
+    result = _eval(node, _Scope(values, types or {}))
     if isinstance(result, _Unknown):
         return Computation(False, unresolved=tuple(dict.fromkeys(result.names)))
     return Computation(True, result)
@@ -137,28 +153,28 @@ def _truth(value) -> bool:
     return bool(value)
 
 
-def _eval(node: Node, values: Mapping[str, object]):
+def _eval(node: Node, scope: _Scope):
     """The node's value (int/float/bool/str/bytes, None for NULL) or _Unknown."""
     kind = node.type
     if kind == "parenthesized_expression":
         inner = next((c for c in node.named_children if c.type != "comment"), None)
-        return _eval(inner, values) if inner is not None else _Unknown([_text(node)])
+        return _eval(inner, scope) if inner is not None else _Unknown([_text(node)])
     if kind == "binary_expression":
-        return _binary(node, values)
+        return _binary(node, scope)
     if kind == "unary_expression":
-        return _unary(node, values)
+        return _unary(node, scope)
     if kind == "conditional_expression":
-        return _conditional(node, values)
+        return _conditional(node, scope)
     if kind == "cast_expression":
-        return _cast(node, values)
+        return _cast(node, scope)
     if kind == "comma_expression":
-        return _eval(node.child_by_field_name("right"), values)
+        return _eval(node.child_by_field_name("right"), scope)
     if kind == "call_expression":
-        return _call(node, values)
+        return _call(node, scope)
     if kind == "identifier":
         name = _text(node)
-        if name in values:
-            return values[name]
+        if name in scope.values:
+            return scope.values[name]
         if name in _BUILTINS:
             return _BUILTINS[name]
         return _Unknown([name])
@@ -172,17 +188,19 @@ def _eval(node: Node, values: Mapping[str, object]):
         # The grammar reads true/false and the firmware TRUE/FALSE macros as
         # boolean literals - an input value for that exact name still wins.
         name = _text(node)
-        if name in values:
-            return values[name]
+        if name in scope.values:
+            return scope.values[name]
         return kind == "true"
     if kind == "null":
         return None
+    if kind == "sizeof_expression":
+        return _sizeof(node, scope)
     if kind in _OPAQUE or kind == "pointer_expression":  # *p and &x need memory too
         return _Unknown([_text(node)])
     return _Unknown([_text(node)])
 
 
-def _call(node: Node, values: Mapping[str, object]):
+def _call(node: Node, scope: _Scope):
     """A call answered by its contract (stdlib_c) when the function and the
     arguments it needs are known. An unknown stdlib argument reports the
     argument's blockers; an unknown function reports the call as written."""
@@ -195,7 +213,7 @@ def _call(node: Node, values: Mapping[str, object]):
     for child in arguments.named_children:
         if child.type == "comment":
             continue
-        result = _eval(child, values)
+        result = _eval(child, scope)
         if isinstance(result, _Unknown):
             blocked.append(tuple(result.names))
             args.append(stdlib_c.UNKNOWN)
@@ -214,10 +232,67 @@ def _call(node: Node, values: Mapping[str, object]):
     return effect.value
 
 
-def _binary(node: Node, values: Mapping[str, object]):
+def _sizeof(node: Node, scope: _Scope):
+    """sizeof(name) from the name's declared type, sizeof(type) from the C
+    sizes values.py uses (32-bit ARM). sizeof of anything that needs the
+    program - an expression, a struct, a typedef this file doesn't declare -
+    stays unknown, reported as written."""
+    target = node.child_by_field_name("value")
+    descriptor = node.child_by_field_name("type")
+    if target is not None:
+        # sizeof x / sizeof(x): the grammar calls x an expression. Only a
+        # plain name can be sized - sizeof(buf[0]) and friends need memory.
+        if target.type == "parenthesized_expression":
+            target = next((c for c in target.named_children if c.type != "comment"), None)
+        if target is None or target.type != "identifier":
+            return _Unknown([_text(node)])
+        written = _text(target)
+    elif descriptor is not None:
+        # sizeof(uint16_t), sizeof(char[12]) - and a variable whose name
+        # reads like a type (number_t) lands here too, so try both ways.
+        written = _text(descriptor)
+    else:
+        return _Unknown([_text(node)])
+    declared = scope.types.get(written, written)
+    size = _c_sizeof(declared, scope)
+    return size if size is not None else _Unknown([_text(node)])
+
+
+def _c_sizeof(type_name: str, scope: _Scope) -> int | None:
+    """Bytes a declared type takes on the firmware's 32-bit ARM, or None for
+    one this can't size (structs, unions, unknown typedefs, empty [])."""
+    text = re.sub(r"\s+", " ", type_name).strip()
+    text = re.sub(r"\b(const|volatile|static|register)\b", "", text).strip()
+    array = re.search(r"\[\s*([^\[\]]*?)\s*\]$", text)
+    if array:
+        element = _c_sizeof(text[:array.start()], scope)
+        dimension = array.group(1)
+        if element is None or not dimension:
+            return None  # char buf[] has no size of its own
+        if dimension.isdigit():
+            return int(dimension) * element  # char[12]
+        parsed = _parse(dimension)
+        count = _eval(parsed, scope) if parsed is not None else None
+        if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+            return count * element  # uint8_t[TX_MAX] with TX_MAX known
+        return None
+    if text.endswith("*") or "(*" in text:
+        return _POINTER_BYTES  # any data or function pointer
+    if text.startswith("enum "):
+        return 4  # an enum is an int on ARM
+    if text in _C_INTEGERS:
+        return _C_INTEGERS[text][0] // 8
+    if text in _REAL_BYTES:
+        return _REAL_BYTES[text]
+    if text in _C_BOOLS:
+        return 1
+    return None
+
+
+def _binary(node: Node, scope: _Scope):
     operator = node.child_by_field_name("operator").type
-    left = _eval(node.child_by_field_name("left"), values)
-    right = _eval(node.child_by_field_name("right"), values)
+    left = _eval(node.child_by_field_name("left"), scope)
+    right = _eval(node.child_by_field_name("right"), scope)
 
     if operator in ("||", "&&"):
         return _logic(operator, left, right)
@@ -302,9 +377,9 @@ def _trunc_div(a: int, b: int) -> int:
     return -(-a // b) if (a < 0) != (b < 0) else a // b
 
 
-def _unary(node: Node, values: Mapping[str, object]):
+def _unary(node: Node, scope: _Scope):
     operator = node.child_by_field_name("operator").type
-    argument = _eval(node.child_by_field_name("argument"), values)
+    argument = _eval(node.child_by_field_name("argument"), scope)
     if operator == "!":
         return argument if isinstance(argument, _Unknown) else not _truth(argument)
     if isinstance(argument, _Unknown):
@@ -321,10 +396,10 @@ def _unary(node: Node, values: Mapping[str, object]):
     return _Unknown([_text(node)])
 
 
-def _conditional(node: Node, values: Mapping[str, object]):
-    condition = _eval(node.child_by_field_name("condition"), values)
-    consequence = _eval(node.child_by_field_name("consequence"), values)
-    alternative = _eval(node.child_by_field_name("alternative"), values)
+def _conditional(node: Node, scope: _Scope):
+    condition = _eval(node.child_by_field_name("condition"), scope)
+    consequence = _eval(node.child_by_field_name("consequence"), scope)
+    alternative = _eval(node.child_by_field_name("alternative"), scope)
     if not isinstance(condition, _Unknown):
         return consequence if _truth(condition) else alternative
     # Which way it goes is unknown - unless both ways give the same answer.
@@ -338,8 +413,8 @@ def _conditional(node: Node, values: Mapping[str, object]):
     return _Unknown(names)
 
 
-def _cast(node: Node, values: Mapping[str, object]):
-    value = _eval(node.child_by_field_name("value"), values)
+def _cast(node: Node, scope: _Scope):
+    value = _eval(node.child_by_field_name("value"), scope)
     if isinstance(value, _Unknown):
         return value
     type_name = _text(node.child_by_field_name("type"))
