@@ -69,6 +69,11 @@ First version.
   used in that function. Click in the code and the matching line on that function's card lights up (the
   declaration, if header or return clicked on, else the innermost if around it), and the word is marked
   on the card and through the function's code. Clicking in the code doesn't move the diagram.
+- **Ctrl+click a variable to see its value**: in the code view, Ctrl+click an input that has a value
+  card value and that value is shown over every use of it in the function - the name faded but still
+  faintly visible, the value on top in white, cut short with `…` where the name is narrower (hover for
+  the whole value). Uses in comments and strings are left alone. Several can show at once; Ctrl+click
+  one again to hide it. Changing the value card updates them straight away.
 - **Value cards** (`ui/value_card.py`, `analysis/values.py`): drag a card's blue input dot out onto the
   canvas and a value card appears where it's dropped, wired to that input. Type a value; it's checked
   against the parameter's type as you type - integers by their range (`uint16_t` 0 to 65,535, with

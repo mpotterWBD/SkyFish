@@ -3,10 +3,10 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QRect, QRegularExpression, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
-from PySide6.QtWidgets import QMenu, QPlainTextEdit, QTextEdit, QWidget
+from PySide6.QtWidgets import QMenu, QPlainTextEdit, QTextEdit, QToolTip, QWidget
 
 from skyfish.analysis.logic import Span
-from skyfish.ui.highlighter import CodeHighlighter
+from skyfish.ui.highlighter import COMMENT, STRING, CodeHighlighter
 
 # Colours from theme.qss's palette (a gutter is painted, so QSS can't reach it).
 _GUTTER_BG = QColor("#1a1a1a")
@@ -14,6 +14,10 @@ _GUTTER_TEXT = QColor("#6a6a6a")
 _HIGHLIGHT = QColor("#2f4a5c")
 _LINK = QColor("#264f78")             # the code a card row came from (VS Code's selection blue)
 _WORD = QColor(80, 191, 255, 70)      # a marked word - the same blue as the cards' word marks
+# Ctrl+click value overlay: the name faded under the code background (still
+# faintly visible), its value on top in white.
+_OVERLAY_FADE = QColor(20, 20, 20, 205)
+_OVERLAY_TEXT = QColor("#FFFFFF")
 
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 
@@ -45,6 +49,8 @@ class CodeViewer(QPlainTextEdit):
     # A plain click in the code (not a drag-select): line (1-based), column,
     # and the identifier clicked on ("" when it isn't one).
     code_clicked = Signal(int, int, str)
+    # Ctrl+click on an identifier: line, column, the identifier.
+    value_peek_requested = Signal(int, int, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -55,7 +61,13 @@ class CodeViewer(QPlainTextEdit):
         self.marked_word: str | None = None
         # (word, line) -> the function to offer a card for, or None.
         self.card_target: Callable[[str, int], object | None] | None = None
+        # Ctrl+click value overlays: {(name, function span): [use positions]},
+        # and the window's lookup for a name's current value as a card shows
+        # it ("\"TEMP\"", "32", "NULL"), or None when it has none.
+        self._overlays: dict[tuple[str, Span], list[tuple[int, int]]] = {}
+        self.value_lookup: Callable[[str, Span], str | None] | None = None
         self.setReadOnly(True)
+        self.viewport().setMouseTracking(True)  # hovering an overlay shows its full value
         self.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         self._highlighter = CodeHighlighter(self.document())
@@ -102,6 +114,7 @@ class CodeViewer(QPlainTextEdit):
         self.ensurePolished()
         self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * TAB_WIDTH_SPACES)
         self.setPlainText(text)
+        self._overlays = {}  # value overlays belong to the code they were made on
         self._line_marks, self._link_marks, self._word_marks = [], [], []
         self.linked_spans: list[Span] = []
         self.marked_word: str | None = None
@@ -183,7 +196,95 @@ class CodeViewer(QPlainTextEdit):
             line, col = cursor.blockNumber() + 1, cursor.positionInBlock()
             cursor.select(QTextCursor.WordUnderCursor)
             word = cursor.selectedText()
-            self.code_clicked.emit(line, col, word if _IDENTIFIER.fullmatch(word) else "")
+            word = word if _IDENTIFIER.fullmatch(word) else ""
+            if event.modifiers() & Qt.ControlModifier:
+                # Ctrl+click: show (or hide) that variable's value over its uses.
+                if word:
+                    self.value_peek_requested.emit(line, col, word)
+            else:
+                self.code_clicked.emit(line, col, word)
+
+    # --- value overlays (Ctrl+click a variable) -------------------------------
+
+    def toggle_overlay(self, name: str, within: Span) -> bool:
+        """Shows name's value over every use of it inside within (a
+        function's span) - or, if it's already showing, hides it. Returns
+        whether it's showing now. Uses inside comments and strings are left
+        alone."""
+        key = (name, within)
+        if key in self._overlays:
+            del self._overlays[key]
+            self.viewport().update()
+            return False
+        start = self.cursor_for(within.line, within.col).position()
+        end = self.cursor_for(within.end_line, within.end_col).position()
+        pattern = QRegularExpression(rf"\b{QRegularExpression.escape(name)}\b")
+        uses = []
+        cursor = self.document().find(pattern, start)
+        while not cursor.isNull() and cursor.selectionEnd() <= end:
+            if not self._in_comment_or_string(cursor.selectionStart()):
+                uses.append((cursor.selectionStart(), cursor.selectionEnd()))
+            cursor = self.document().find(pattern, cursor.selectionEnd())
+        self._overlays[key] = uses
+        self.viewport().update()
+        return True
+
+    @property
+    def overlays(self) -> dict:
+        """{(name, function span): [(start, end) document positions of each use]}."""
+        return dict(self._overlays)
+
+    def _in_comment_or_string(self, position: int) -> bool:
+        block = self.document().findBlock(position)
+        offset = position - block.position()
+        quiet = {COMMENT.foreground().color().name(), STRING.foreground().color().name()}
+        for fmt_range in block.layout().formats():
+            if fmt_range.start <= offset < fmt_range.start + fmt_range.length:
+                return fmt_range.format.foreground().color().name() in quiet
+        return False
+
+    def _overlay_boxes(self):
+        """(rect in the viewport, the value to show) for every overlaid use
+        whose value is known right now - looked up each time, so typing a new
+        value into a value card shows straight away."""
+        for (name, within), uses in self._overlays.items():
+            value = self.value_lookup(name, within) if self.value_lookup is not None else None
+            if value is None:
+                continue
+            for start, end in uses:
+                cursor = QTextCursor(self.document())
+                cursor.setPosition(start)
+                left = self.cursorRect(cursor)
+                cursor.setPosition(end)
+                right = self.cursorRect(cursor)
+                yield QRect(left.left(), left.top(), max(right.left() - left.left(), 1), left.height()), value
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().paintEvent(event)
+        if not self._overlays:
+            return
+        painter = QPainter(self.viewport())
+        painter.setFont(self.font())
+        metrics = self.fontMetrics()
+        for rect, value in self._overlay_boxes():
+            # Fade the name (still faintly there), then the value on top in white,
+            # cut to the name's width - hover shows it all.
+            painter.fillRect(rect, _OVERLAY_FADE)
+            painter.setPen(_OVERLAY_TEXT)
+            shown = metrics.elidedText(value, Qt.ElideRight, max(rect.width(), metrics.horizontalAdvance("…")))
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, shown)
+        painter.end()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().mouseMoveEvent(event)
+        if not self._overlays:
+            return
+        point = event.position().toPoint()
+        for rect, value in self._overlay_boxes():
+            if rect.contains(point):
+                QToolTip.showText(event.globalPosition().toPoint(), value, self.viewport(), rect)
+                return
+        QToolTip.hideText()
 
     # --- line-number gutter ---------------------------------------------
 

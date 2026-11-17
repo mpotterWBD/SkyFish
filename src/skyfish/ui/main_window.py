@@ -103,6 +103,9 @@ class MainWindow(QMainWindow):
         self.viewer.add_card_requested.connect(self.add_function_card)
         # Click in the code -> the matching card line lights up (see _on_code_clicked).
         self.viewer.code_clicked.connect(self._on_code_clicked)
+        # Ctrl+click a variable -> its value over every use in the function.
+        self.viewer.value_lookup = self._value_for
+        self.viewer.value_peek_requested.connect(self._on_value_peek)
 
         self.analytics_panel = QWidget()
         self.analytics_panel.setObjectName("analyticsPanel")
@@ -126,6 +129,7 @@ class MainWindow(QMainWindow):
         self.cards = CardCanvas()
         # Click a card line -> its code is highlighted (see _on_card_clicked).
         self.cards.card_clicked.connect(self._on_card_clicked)
+        self.cards.values_changed.connect(self.viewer.viewport().update)  # overlays show new values
         for box in (self.show_functions, self.show_methods, self.show_variables, self.show_logic):
             box.toggled.connect(self._apply_card_filters)
         self._apply_card_filters()
@@ -442,6 +446,26 @@ class MainWindow(QMainWindow):
         else:
             self.viewer.show_link([], scroll=False)
         self.viewer.mark_word(word or None, within)
+
+    # --- Ctrl+click value overlays -----------------------------------------------
+
+    def _value_for(self, name: str, within) -> str | None:
+        """name's value as its function's card shows it ("\"TEMP\"", "32",
+        "NULL"), when a value card gives it one; else None. within is the
+        function's span."""
+        function = next((f for f in self._functions if f.has_body and f.span == within), None)
+        card = self.cards.card_for(function) if function is not None else None
+        return card.input_values.get(name) if card is not None else None
+
+    def _on_value_peek(self, line: int, col: int, word: str) -> None:
+        """Ctrl+click on word: show its value over every use in this function
+        - only for an input that has a value - or hide it if it's showing."""
+        function = self._function_at(line, col)
+        if function is None:
+            return
+        showing = (word, function.span) in self.viewer.overlays
+        if showing or self._value_for(word, function.span) is not None:
+            self.viewer.toggle_overlay(word, function.span)
 
     def _function_at(self, line: int, col: int) -> FunctionInfo | None:
         around = [f for f in self._functions if f.has_body and f.span is not None and f.span.contains(line, col)]

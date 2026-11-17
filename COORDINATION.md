@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | src/skyfish/ui/code_viewer.py, src/skyfish/ui/main_window.py, src/skyfish/ui/card_canvas.py, tests/test_main_window.py, CHANGELOG.md | 2026-11-16 20:07 | in progress - Ctrl+click value overlay in the code view |
+| Claude  | (none)                        |                  | value overlay done, committed |
 | Copilot | (none)                        |                  | simulate() runner done, committed (80f8849) |
 
 ## Backlog

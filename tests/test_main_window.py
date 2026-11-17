@@ -756,3 +756,81 @@ def test_linked_code_is_centred_in_the_code_view(make_window, tmp_path):
     top = viewer.cursorRect(viewer.cursor_for(span.line, span.col)).center().y()
     middle = viewer.viewport().height() / 2
     assert abs(top - middle) < viewer.fontMetrics().height() * 1.5
+
+
+OVERLAY_SOURCE = (
+    "bool addKeyValuePair(char *dataCSV, uint16_t size, const char *KEY, int VALUE) {\n"   # 1
+    "    // size is checked first\n"                                                       # 2
+    "    if(dataCSV == NULL || KEY == NULL || size == 0) {\n"                               # 3
+    "        return false;\n"                                                              # 4
+    "    }\n"                                                                              # 5
+    "    snprintf(dataCSV, size, \"size\");\n"                                            # 6
+    "    return true;\n"                                                                   # 7
+    "}\n"                                                                                  # 8
+)
+
+
+def _ctrl_click_code(window, line, col):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    viewer = window.viewer
+    point = viewer.cursorRect(viewer.cursor_for(line, col)).center()
+    point.setX(point.x() + 2)
+    QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.ControlModifier, point)
+
+
+def test_ctrl_click_shows_a_value_over_every_use(make_window, tmp_path):
+    path = tmp_path / "drv.c"
+    path.write_text(OVERLAY_SOURCE)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    viewer = window.viewer
+
+    # No value yet: Ctrl+click does nothing.
+    _ctrl_click_code(window, 3, 43)  # "size" in the if
+    assert viewer.overlays == {}
+
+    size_card = window.cards.add_value_card(card, "size")
+    size_card.set_text("32")
+    _ctrl_click_code(window, 3, 43)
+    [(key, uses)] = viewer.overlays.items()
+    assert key[0] == "size"
+    # The parameter, the if and the snprintf argument - not the comment or the string.
+    texts = []
+    for start, end in uses:
+        cursor = viewer.cursor_for(1, 0)
+        cursor.setPosition(start)
+        texts.append(cursor.block().blockNumber() + 1)
+    assert texts == [1, 3, 6]
+    boxes = list(viewer._overlay_boxes())
+    assert [value for _, value in boxes] == ["32", "32", "32"]
+
+    # A new value shows straight away.
+    size_card.set_text("0x40")
+    assert [value for _, value in viewer._overlay_boxes()] == ["64", "64", "64"]
+
+    # Ctrl+click again hides it; a plain click doesn't.
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.NoModifier,
+                     viewer.cursorRect(viewer.cursor_for(3, 43)).center())
+    assert viewer.overlays
+    _ctrl_click_code(window, 6, 23)  # another use of size hides it too
+    assert viewer.overlays == {}
+
+    # Several at once; text values are cut to the name's width (full on hover).
+    key_card = window.cards.add_value_card(card, "KEY")
+    key_card.set_text("TEMP")
+    _ctrl_click_code(window, 3, 28)  # KEY
+    size_card.set_text("32")
+    _ctrl_click_code(window, 3, 43)  # size
+    assert {name for name, _ in viewer.overlays} == {"KEY", "size"}
+    values = {value for _, value in viewer._overlay_boxes()}
+    assert values == {'"TEMP"', "32"}
+
+    # Opening a file clears them.
+    window.open_file(path)
+    assert viewer.overlays == {}

@@ -144,6 +144,7 @@ class FunctionCard(QGraphicsObject):
         # follow), and when an input's dot is dragged out and dropped.
         self.on_moved = None
         self.on_input_dropped = None
+        self.on_values_changed = None  # set by the canvas: a value card's value changed
         self._input_drag: tuple[str, object] | None = None  # (parameter name, the line being drawn)
         self._layout()
 
@@ -184,6 +185,8 @@ class FunctionCard(QGraphicsObject):
         self._layout()
         self.update()
         self._moved()
+        if self.on_values_changed is not None:
+            self.on_values_changed()
 
     def input_port_scene_pos(self, name: str) -> QPointF | None:
         """Where the input's blue dot is, in canvas coordinates, or None when
@@ -587,6 +590,8 @@ class CardCanvas(QGraphicsView):
     cards_changed = Signal(int)    # how many cards there are now
     # A line or word on a card was clicked: (card, code spans it stands for, word or None).
     card_clicked = Signal(object, object, object)
+    # A value typed into a value card changed (the code view's overlays redraw).
+    values_changed = Signal()
     zoom_changed = Signal(float)   # 1.0 = 100%
 
     def __init__(self, parent=None) -> None:
@@ -623,6 +628,7 @@ class CardCanvas(QGraphicsView):
             card.on_moved = lambda c=card: self._update_wires(c)
             card.on_input_dropped = self.add_value_card
             card.on_clicked = lambda c, spans, word: self.card_clicked.emit(c, spans, word)
+            card.on_values_changed = self.values_changed.emit
             self._cards[key] = card
             self.scene().addItem(card)
             self._apply_to(card)
@@ -641,6 +647,10 @@ class CardCanvas(QGraphicsView):
         self.cards_changed.emit(len(self._cards))
 
     # --- value cards ----------------------------------------------------------
+
+    def card_for(self, function: FunctionInfo) -> FunctionCard | None:
+        """The card showing function, if it has one."""
+        return self._cards.get((function.name, function.line))
 
     def card_at_code(self, line: int, col: int) -> FunctionCard | None:
         """The card for the function whose code holds line, col - the
