@@ -1120,3 +1120,41 @@ def test_every_ctrl_click_says_what_happened(make_window, tmp_path):
     assert note().startswith("if: not an input of addKeyValuePair")
     _ctrl_click_code(window, 10, 11)  # size in other(), which has no card
     assert note().startswith("size: other has no card")
+
+
+def test_ctrl_click_on_a_card_shows_an_inputs_value_on_the_card(make_window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    path = tmp_path / "drv.c"
+    path.write_text(OVERLAY_SOURCE)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    view = window.cards
+
+    def ctrl_click(word, occurrence):
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.ControlModifier,
+                         view.mapFromScene(card.mapToScene(_point_on(card, word, occurrence))))
+
+    ctrl_click("size", 1)  # in the if row (0 is its input row)
+    assert card.last_note.startswith("size: no value yet")
+    size = view.add_value_card(card, "size")
+    size.set_text("32")
+    ctrl_click("size", 1)
+    assert card.last_note == "size = 32  (shown on 1 use; Ctrl+click again to hide)"
+    [(name, _, value)] = list(card._overlay_boxes())
+    assert (name, value) == ("size", "32")  # on the if row only - its input row already says "= 32"
+
+    size.set_text("0x40")  # a new value shows straight away
+    assert [v for _, _, v in card._overlay_boxes()] == ["64"]
+
+    ctrl_click("NULL", 0)
+    assert card.last_note.startswith("NULL: not an input")
+    ctrl_click("size", 1)
+    assert card.last_note == "size: value hidden" and list(card._overlay_boxes()) == []
+    # A plain click still marks the word, as before.
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                     view.mapFromScene(card.mapToScene(_point_on(card, "size", 1))))
+    assert card.highlight == "size"

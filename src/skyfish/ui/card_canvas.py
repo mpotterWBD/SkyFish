@@ -23,12 +23,13 @@ import re
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QFontMetricsF, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsObject,
     QGraphicsProxyWidget,
+    QToolTip,
     QGraphicsScene,
     QGraphicsView,
     QMenu,
@@ -58,6 +59,9 @@ _DIAMOND = QColor("#C586C0")   # same as if/else in the code
 _HIGHLIGHT_FILL = QColor(80, 191, 255, 55)
 _HIGHLIGHT_BORDER = QColor(80, 191, 255, 150)
 _QUIET_TEXT = QColor("#9a9a9a")
+# Ctrl+click value overlay: the name faded under the card background, the value in white.
+_OVERLAY_FADE = QColor(30, 30, 30, 215)
+_OVERLAY_TEXT = QColor("#FFFFFF")
 _STALE_CROSS = QColor(248, 100, 100, 190)  # a card whose function is gone from the code
 _LINK_BAND = QColor(38, 79, 120, 150)  # the line tied to the code view - the code view's link blue  # "always", "otherwise", "in loop" ...
 
@@ -153,6 +157,9 @@ class FunctionCard(QGraphicsObject):
         self.on_moved = None
         self.on_input_dropped = None
         self.on_values_changed = None  # set by the canvas: a value card's value changed
+        # Inputs Ctrl+clicked to show their value over their uses on this card.
+        self.value_overlays: set[str] = set()
+        self.last_note = ""  # what the last Ctrl+click did, as shown at the pointer
         self._input_drag: tuple[str, object] | None = None  # (parameter name, the line being drawn)
         self._layout()
 
@@ -433,6 +440,13 @@ class FunctionCard(QGraphicsObject):
                 self.on_close(self)
             event.accept()
             return
+        if (event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier
+                and not self._in_title(event.pos()) and self.input_at(event.pos()) is None):
+            # Ctrl+click a name: show (or hide) its value over its uses on the card.
+            self.last_note = self.toggle_value_overlay(self.word_at(event.pos()))
+            QToolTip.showText(QCursor.pos(), self.last_note)
+            event.accept()
+            return
         # A crossed-out card's inputs can't take new value cards: its code is gone.
         input_name = (self.input_at(event.pos())
                       if event.button() == Qt.LeftButton and not self.stale else None)
@@ -497,6 +511,10 @@ class FunctionCard(QGraphicsObject):
             event.accept()
 
     def hoverMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        for _, rect, value in self._overlay_boxes():
+            if rect.contains(event.pos()):
+                QToolTip.showText(QCursor.pos(), value)  # the whole value, when it's cut short
+                break
         if self.close_rect().contains(event.pos()):
             self.setCursor(Qt.PointingHandCursor)
         elif not self.stale and self.input_at(event.pos()) is not None:
@@ -527,8 +545,57 @@ class FunctionCard(QGraphicsObject):
         return QRectF(self._size[0] - CARD_PADDING - CLOSE_SIZE, (self._title_h - CLOSE_SIZE) / 2,
                       CLOSE_SIZE, CLOSE_SIZE)
 
+    # --- Ctrl+click value overlays ------------------------------------------------
+
+    def toggle_value_overlay(self, word: str | None) -> str:
+        """Shows (or hides) an input's value over every use of it on this
+        card, and says what happened - or why nothing did."""
+        if not word:
+            return "Ctrl+click an input's name to show its value here"
+        if word in self.value_overlays:
+            self.value_overlays.discard(word)
+            self.update()
+            return f"{word}: value hidden"
+        if word not in {p.name for p in self.parameters}:
+            return f"{word}: not an input - only inputs with a value card show a value"
+        if word not in self.input_values:
+            return f"{word}: no value yet - drag its blue dot out and type one"
+        self.value_overlays.add(word)
+        self.update()
+        uses = sum(1 for name, _, _ in self._overlay_boxes() if name == word)
+        return (f"{word} = {self.input_values[word]}  (shown on {uses} use{'' if uses == 1 else 's'}; "
+                "Ctrl+click again to hide)")
+
+    def _overlay_boxes(self):
+        """(name, rect, value) for every use on the card of an input whose
+        value is showing. Its own input row already reads "= value", and the
+        title and variable list aren't uses, so those are left alone."""
+        shown_locals = len(self._locals) if self._show_variables else 0
+        first_use = 1 + shown_locals + len(self._inputs)  # runs: title, variables, inputs, then logic + outputs
+        for name in sorted(self.value_overlays):
+            value = self.input_values.get(name)
+            if value is None:
+                continue  # its value card was cleared or closed: nothing to show
+            pattern = _whole_word(name)
+            for x, y, text, _, _ in self._runs[first_use:]:
+                for m in pattern.finditer(text):
+                    left = x + self._metrics.horizontalAdvance(text[:m.start()])
+                    width = self._metrics.horizontalAdvance(m.group(0))
+                    yield name, QRectF(left - 1, y - self._line_h / 2 + 1, width + 2, self._line_h - 2), value
+
+    def _paint_value_overlays(self, painter: QPainter) -> None:
+        painter.setFont(self._font)
+        for _, rect, value in self._overlay_boxes():
+            # The name faded but still faintly there, the value on top in white,
+            # cut to the name's width (hover shows it all).
+            painter.fillRect(rect, _OVERLAY_FADE)
+            painter.setPen(_OVERLAY_TEXT)
+            shown = self._metrics.elidedText(value, Qt.ElideRight, max(rect.width(), self._metrics.horizontalAdvance("…")))
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, shown)
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
         self._paint_card(painter)
+        self._paint_value_overlays(painter)
         _draw_close(painter, self.close_rect())
         if self.stale:
             # Gone from the code: a big X across everything but the title bar.
