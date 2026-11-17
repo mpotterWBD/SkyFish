@@ -69,15 +69,20 @@ First version.
   used in that function. Click in the code and the matching line on that function's card lights up (the
   declaration, if header or return clicked on, else the innermost if around it), and the word is marked
   on the card and through the function's code. Clicking in the code doesn't move the diagram.
-- **Black boxes - calls and assignments on cards**: between a card's if rows, in code order, every call
-  and assignment now has its own line. A call is a box: its name on top, its arguments down the left
-  (each with its value when known, e.g. `sizeof(number) = 12`, `VALUE = 100`) and what it returns or
-  changes down the right (`returns 3`, `number ← "100"`, `used = 4`). Standard C functions are worked
-  out by their contract (Copilot's `stdlib_c.py`) without going inside; anything else shows `?`. An
-  assignment without a single call (`pairLength = strlen(KEY) + 1 + ...`) is one line with its result
-  (`= 9`). Lines sit indented under the if they're in, and tie to their code like any card line. The
-  step-through steps through them too: a line's result appears once you step past it, and its arguments'
-  values once the run reaches it. Ctrl+click value overlays skip text inside quotes.
+- **Calls and assignments on cards, written out as code**: between a card's if rows, in code order,
+  every call and assignment has its own line, written as it is in the code
+  (`used = strlen(dataCSV)`, `snprintf(number, sizeof(number), "%d", VALUE)`), indented under the if
+  it's in, and tied to its code like any card line. The step-through steps through them too. (These
+  were boxes listing arguments and results at first; their values now come from Ctrl+click instead.)
+- **Ctrl+click a call or a local on a card**: Ctrl+click a function's name on a card and every call of
+  it there is covered by what that call returned - `strlen(dataCSV)` → `4`, `strlen(number)` → `3`,
+  each `snprintf(...)` → the length it wrote - for any standard C function that returns a value.
+  Locals (`used`, `number`, `pairLength`) and `#define`s work like inputs: each use shows the value the
+  run had on that line. Values take hold as the run gets there: while stepping, a line's names show
+  their values once the run reaches it, and its calls' results (and what it writes) once you step past
+  it; not stepping, everything the run worked out shows. A value showing for a whole call covers
+  anything shown inside it. A call to something that isn't standard C (HAL, your other files) says
+  "out of scope for now". Overlays skip text inside quotes.
 - **Step-through on every card**: a bar under each card (not crossed-out ones, and only while Logic is
   ticked) with **|◀ ◀ ▶ ▶|**. A step is one card line: ▶ moves to the next card line the run passes, ◀
   back one, ▶| straight to where the function leaves, |◀ back to the front of the card. An if isn't

@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | (none)                        |                  | black boxes on cards done, committed |
+| Claude  | (none)                        |                  | call lines as code; Ctrl+click locals and calls - done, committed |
 | Copilot | (none)                        |                  | B1 sizeof done, committed (fef62db) |
 
 ## Backlog

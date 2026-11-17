@@ -1154,7 +1154,7 @@ def test_ctrl_click_on_a_card_shows_an_inputs_value_on_the_card(make_window, tmp
     assert [v for _, _, v in card._overlay_boxes()] == ["64", "64"]
 
     ctrl_click("NULL", 0)
-    assert card.last_note.startswith("NULL: not an input")
+    assert card.last_note.startswith("NULL: not a variable or a call")
     ctrl_click("size", 1)
     assert card.last_note == "size: value hidden" and list(card._overlay_boxes()) == []
     # A plain click still marks the word, as before.
@@ -1241,7 +1241,7 @@ def test_step_through_a_card_line_by_line(make_window, tmp_path):
     assert _lit(card) == "if dataCSV == NULL || KEY == NULL || size == 0"
     assert [_code_text(window.viewer, s) for s in window.viewer.linked_spans][0].startswith("if(dataCSV")
     _press(window, card, "forward")  # past it (false): the strlen line
-    assert _lit(card) == "strlen"  # the strlen box (used = strlen(dataCSV))
+    assert _lit(card) == "used = strlen(dataCSV)"  # written out as the code
     _press(window, card, "forward")  # the next if
     assert _lit(card) == "if used + 1 > size"
     _press(window, card, "forward")  # past that (false): otherwise
@@ -1289,6 +1289,54 @@ def test_step_stops_where_it_cant_tell_and_says_why(make_window, tmp_path):
     assert card.step_note == "can't tell from here - needs MAXIMUM"
     window.cards.cards[0].step_forward()
     assert _lit(card) == "if v > MAXIMUM"  # can't go further
+
+
+def test_ctrl_click_a_call_or_a_local_on_a_card_shows_its_value(make_window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    window = _step_window(make_window, tmp_path)
+    card = _add(window, "add")
+    for name, text in (("dataCSV", "text"), ("size", "64"), ("KEY", "K")):
+        window.cards.add_value_card(card, name).set_text(text)
+    view = window.cards
+
+    def shown(word):
+        return [v for name, _, v in card._overlay_boxes() if name == word]
+
+    card.setPos(400, 20)  # clear of the value cards
+    # Ctrl+clicking strlen covers the whole call, strlen(dataCSV), with what it returned.
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.ControlModifier,
+                     view.mapFromScene(card.mapToScene(_point_on(card, "strlen", 0))))
+    assert card.last_note.startswith("strlen(): shows what it returns on 1 call")
+    (_, rect, value), = card._overlay_boxes()
+    assert value == "4" and rect.width() > card._metrics.horizontalAdvance("strlen(dataCSV)")
+    # A local: its value on the line that sets it, and where it's used after.
+    assert card.toggle_value_overlay("used") == "used: shown on 2 uses; Ctrl+click again to hide"
+    assert shown("used") == ["4", "4"]
+
+    # Stepping: values take hold as the run steps over the line.
+    _press(window, card, "forward")  # the first if
+    assert shown("strlen") == [] and shown("used") == []
+    _press(window, card, "forward")  # on used = strlen(dataCSV), not past it yet
+    assert shown("strlen") == [] and shown("used") == []  # used has no value before this line
+    _press(window, card, "forward")  # past it
+    assert shown("strlen") == ["4"] and shown("used") == ["4", "4"]
+    _press(window, card, "start")
+    assert shown("strlen") == []
+
+    assert card.toggle_value_overlay("strlen") == "strlen: value hidden" and shown("strlen") == []
+    assert card.toggle_value_overlay("LIMIT").startswith("LIMIT: no value yet where it's used")  # not on this card
+    assert card.toggle_value_overlay("bogus") == "bogus: not a variable or a call on this card"
+
+
+def test_ctrl_click_a_non_standard_call_is_out_of_scope(make_window, tmp_path):
+    path = tmp_path / "hal.c"
+    path.write_text("int wait(int ms) {\n    int t = HAL_GetTick();\n    return t;\n}\n")
+    window = make_window()
+    window.open_file(path)
+    card = _add(window, "wait")
+    assert card.toggle_value_overlay("HAL_GetTick") == "HAL_GetTick(): not standard C - out of scope for now"
+    assert "HAL_GetTick" not in card.value_overlays
 
 
 def test_no_step_bar_on_crossed_out_cards_or_without_logic(make_window, tmp_path):

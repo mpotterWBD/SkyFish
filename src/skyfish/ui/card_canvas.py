@@ -63,7 +63,6 @@ _HIGHLIGHT_FILL = QColor(80, 191, 255, 55)
 _HIGHLIGHT_BORDER = QColor(80, 191, 255, 150)
 _QUIET_TEXT = QColor("#9a9a9a")
 _STEP_BAR_BG = QColor("#252525")
-_BOX_BG = QColor("#191919")  # a call's black box
 _STEP_ICON = QColor("#e0e0e0")
 _STEP_ICON_OFF = QColor("#5a5a5a")
 _OUTPUT_LIT = QColor("#35C053")              # the output a run leaves by
@@ -85,10 +84,7 @@ ZOOM_STEP = 1.15         # per scroll-wheel notch
 FIT_MARGIN = 40          # space around the cards when the view fits them
 STEP_BAR_HEIGHT = 30     # the step-through bar under each card
 STEP_BUTTON_WIDTH = 44
-BOX_PAD = 8              # inside a call's box
-BOX_GAP = 18             # between a box's inputs and outputs columns
-BOX_MIN_COLUMN = 70      # narrowest a box column gets
-MAX_ARG_CHARS = 40       # longer arguments end in "…"
+MAX_LINE_CHARS = 72      # a longer call / assignment line ends in "…"
 OUT = "out"              # in a step path: the function's output, after its last card line
 INDENT_CHARS = 3         # per nesting level in the logic rows
 MAX_CONDITION_CHARS = 56  # longer conditions end in "…"
@@ -122,6 +118,30 @@ _IDENT = re.compile(r"[A-Za-z_]\w*")
 _STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')  # a "string" in a card line
 
 
+def _call_end(text: str, open_index: int) -> int | None:
+    """Where the call whose "(" is at open_index ends (just past its ")"),
+    or None when the line was cut short before it closes."""
+    depth, quote, escaped = 0, None, False
+    for i in range(open_index, len(text)):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
 def _c_value(value) -> str:
     """A run's value written the way C would show it on a card."""
     if value is None:
@@ -136,23 +156,13 @@ def _c_value(value) -> str:
 
 
 @dataclass
-class _Box:
-    """A call or assignment line on the card. With a call it's a box: the
-    call's name on top, its arguments down the left (with their values when
-    known) and what it returns or changes down the right. Without a call
-    (x = a + b) it's one line with its result on the right."""
+class _Line:
+    """A call or assignment on the card, written out as its line of code."""
     item: int             # index into the card's items
     action: Action
     x: float
-    top: float
-    width: float
-    height: float
-    left_w: float         # the arguments column
-    title_y: float
-    lines: list           # [(centre y, argument spans)] - with their values
-    bare: list            # the same arguments without values, for lines the run hasn't reached
-    outputs: list         # [(centre y, output spans)]
-    is_box: bool          # a call: drawn boxed; else one line
+    y: float              # centre
+    spans: list           # [(text, QColor)]
 
 
 @dataclass
@@ -329,7 +339,7 @@ class FunctionCard(QGraphicsObject):
         self._rows: list[_Row] = []
         self._ports: dict[str, float] = {}   # output -> port centre y
         self._lanes: dict[str, float] = {}   # output -> its vertical wire's x
-        self._boxes = []
+        self._lines = []
         self._item_y = {}
         if self._show_logic and (self._input_spans or self.logic_rows):
             y += CARD_PADDING / 2
@@ -346,16 +356,21 @@ class FunctionCard(QGraphicsObject):
                 y += line_h / 2  # a little air between inputs and logic
             indent_w = INDENT_CHARS * self._metrics.horizontalAdvance(" ")
             marker_w = self._metrics.horizontalAdvance("  ")
-            self._boxes: list[_Box] = []
-            self._item_y: dict[int, object] = {}  # item index -> its _Row or _Box
+            self._lines: list[_Line] = []
+            self._item_y: dict[int, object] = {}  # item index -> its _Row or _Line
             self._run_results()
             for index, (kind, obj) in enumerate(self._items):
                 if kind == "action":
-                    box = self._layout_box(index, obj, y, indent_w, marker_w)
-                    self._boxes.append(box)
-                    self._item_y[index] = box
-                    content_right = max(content_right, box.x + box.width)
-                    y = box.top + box.height + 4
+                    # The line as written, indented under the if it sits in.
+                    indent = max((r.indent + 1 for r in self.logic_rows
+                                  if r.body_span is not None and obj.span is not None
+                                  and r.body_span.contains(obj.span.line, obj.span.col)), default=0)
+                    x = CARD_PADDING + indent * indent_w + marker_w
+                    spans = colour_spans(_shorten(obj.text, MAX_LINE_CHARS), self._language)
+                    self._lines.append(_Line(index, obj, x, y + line_h / 2, spans))
+                    self._item_y[index] = self._lines[-1]
+                    content_right = max(content_right, x + self._width_of(spans))
+                    y += line_h
                     continue
                 row = obj
                 x = CARD_PADDING + row.indent * indent_w + marker_w
@@ -411,19 +426,12 @@ class FunctionCard(QGraphicsObject):
             var_y += line_h
         params = {p.name: p for p in self.parameters}
         runs += [(CARD_PADDING, iy, text(spans), [params[name].span], None) for iy, spans, name in self._inputs]
-        self._item_runs: dict[int, int] = {}  # item index -> its first run
-        self._run_boxes: dict[int, _Box] = {}  # run index -> the box it's in
+        self._item_runs: dict[int, int] = {}  # item index -> its run
         for index in sorted(self._item_y):
             thing = self._item_y[index]
             self._item_runs[index] = len(runs)
-            if isinstance(thing, _Box):
-                head = thing.action.call if thing.is_box else text(thing.lines[0][1])
-                self._run_boxes[len(runs)] = thing
-                runs.append((thing.x + BOX_PAD if thing.is_box else thing.x, thing.title_y, head,
-                             [thing.action.span], None))
-                for line_y, spans in (thing.lines if thing.is_box else []):
-                    self._run_boxes[len(runs)] = thing
-                    runs.append((thing.x + BOX_PAD, line_y, text(spans), [thing.action.span], None))
+            if isinstance(thing, _Line):
+                runs.append((thing.x, thing.y, text(thing.spans), [thing.action.span], None))
                 continue
             r = thing
             # A branch stands for its header and the return it leaves through.
@@ -529,14 +537,14 @@ class FunctionCard(QGraphicsObject):
         self.update()
 
     def _paint_link(self, painter: QPainter) -> None:
-        if self.linked_run is None or self.linked_run in self._run_boxes:
-            return  # a call / assignment line lights itself (see _paint_boxes)
+        if self.linked_run is None:
+            return
         y = self._runs[self.linked_run][1]
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(_LINK_BAND))
         painter.drawRect(QRectF(1, y - self._line_h / 2, self._size[0] - 2, self._line_h))
 
-    # --- the run behind the card: black-box results -------------------------------------
+    # --- the run behind the card: values at each line -------------------------------
 
     def refresh_run(self) -> None:
         """Runs again (the canvas calls this once it has given the card its
@@ -548,125 +556,40 @@ class FunctionCard(QGraphicsObject):
         self.update()
 
     def _run_results(self):
-        """The run with today's inputs, and what each call / assignment did
-        in it: {action span: ([(argument, its value or None)], [outputs])}.
-        Arguments are valued as they stood when that line ran."""
+        """The run with today's inputs, and the values it had at each card
+        line: self._states[item] = (before the line, after it). Only a call /
+        assignment that ran changes anything; one the run can't be sure of
+        forgets what it would have written."""
         if self._trace is None:
             inputs = self.inputs_provider() if self.inputs_provider is not None else {}
             self._trace = simulate(self.function, inputs, self.defines)
-            types = {v.name: v.type for v in self.function.variables if v.type}
+            self._types = {v.name: v.type for v in self.function.variables if v.type}
             state = {**self.defines, **inputs}
-            self._results = {}
-            for kind, action in self._items:
-                if kind != "action":
-                    continue
-                step = self._trace.steps.get(action.span)
-                values = []
-                for arg in action.args:
-                    computed = compute_expression(arg, state, types)
-                    shown = _c_value(computed.value) if computed.known else None
-                    if shown is not None and shown.strip('"') == arg.strip('"'):
-                        shown = None  # a literal: its value is what's written
-                    values.append((arg, shown))
-                outs = []
-                if step is not None and step.status == "ran":
-                    if action.target:
-                        if action.target in step.changes:
-                            outs.append(f"{action.target} = {_c_value(step.changes[action.target])}")
-                    else:
-                        if step.known:
-                            outs.append(f"returns {_c_value(step.returned)}")
-                        outs += [f"{k} ← {_c_value(v)}" for k, v in step.changes.items()]
-                    state.update({k: v for k, v in step.changes.items() if _IDENT.fullmatch(k)})
-                elif action.call and (not knows(action.call) or (step is not None and step.unknown_call)):
-                    outs.append("?")  # not standard C: a black box we can't see into yet
-                self._results[action.span] = (values, outs)
+            # Locals with a plain initial value ("int used = 0;") have it from the start.
+            for variable in sorted(self._locals, key=lambda v: v.line):
+                if getattr(variable, "initial", "") and variable.name not in state:
+                    result = compute_expression(variable.initial, state, self._types)
+                    if result.known:
+                        state[variable.name] = result.value
+            self._states = {}
+            for index, (kind, item) in enumerate(self._items):
+                before = dict(state)
+                if kind == "action":
+                    step = self._trace.steps.get(item.span)
+                    status = step.status if step is not None else "unknown"
+                    if status == "ran":
+                        state.update({k: v for k, v in step.changes.items() if _IDENT.fullmatch(k)})
+                    elif status != "skipped":
+                        for name in (item.target, *item.args):
+                            if _IDENT.fullmatch(name or ""):
+                                state.pop(name, None)  # may have been written: no longer known
+                self._states[index] = (before, dict(state))
         return self._trace
 
-    def _layout_box(self, index: int, action: Action, y: float, indent_w: float, marker_w: float) -> _Box:
-        line_h = self._line_h
-        # Indented under the if it sits in.
-        indent = max((r.indent + 1 for r in self.logic_rows
-                      if r.body_span is not None and action.span is not None
-                      and r.body_span.contains(action.span.line, action.span.col)), default=0)
-        x = CARD_PADDING + indent * indent_w + marker_w
-        values, outs = self._results.get(action.span, ([], []))
-        out_spans = [colour_spans(o, self._language) if o != "?" else [("?", _QUIET_TEXT)] for o in outs]
-        if not action.call:
-            # x = a + b: one line, its result on the right.
-            spans = colour_spans(_shorten(action.text, MAX_CONDITION_CHARS), self._language)
-            result = [colour_spans("= " + o.split(" = ", 1)[1], self._language) if " = " in o else colour_spans(o, self._language)
-                      for o in outs]
-            left_w = self._width_of(spans)
-            right_w = max((self._width_of(r) for r in result), default=0)
-            width = left_w + (BOX_GAP + right_w if result else 0)
-            centre = y + line_h / 2
-            return _Box(index, action, x, y, width, line_h, left_w, centre, [(centre, spans)], [(centre, spans)],
-                        [(centre, r) for r in result[:1]], False)
-        arg_spans, bare_spans = [], []
-        for arg, value in values:
-            spans = colour_spans(_shorten(arg, MAX_ARG_CHARS), self._language)
-            bare_spans.append(spans)
-            if value is not None:
-                spans = [*spans, (" = ", _QUIET_TEXT), *colour_spans(_shorten(value, MAX_INPUT_VALUE_CHARS), self._language)]
-            arg_spans.append(spans)
-        left_w = max([self._metrics.horizontalAdvance(action.call), BOX_MIN_COLUMN,
-                      *(self._width_of(sp) for sp in arg_spans)])
-        right_w = max([BOX_MIN_COLUMN, *(self._width_of(sp) for sp in out_spans)])
-        lines = max(len(arg_spans), len(out_spans), 1)
-        top = y + 2
-        height = line_h + lines * line_h + BOX_PAD
-        title_y = top + line_h / 2 + 2
-        first = top + line_h + 2 + line_h / 2
-        return _Box(index, action, x, top, BOX_PAD + left_w + BOX_GAP + right_w + BOX_PAD, height, left_w, title_y,
-                    [(first + i * line_h, sp) for i, sp in enumerate(arg_spans)],
-                    [(first + i * line_h, sp) for i, sp in enumerate(bare_spans)],
-                    [(first + i * line_h, sp) for i, sp in enumerate(out_spans)], True)
-
-    def _box_shows_result(self, box: _Box) -> bool:
-        """Not stepping: every result shows. Stepping: a line's result shows
-        once you've stepped past it, like an if."""
-        if not self.stepping:
-            return True
-        return box.item in self.step_path()[:self.step_pos]
-
-    def _box_reached(self, box: _Box) -> bool:
-        """Not stepping, or the run has got to this line (the current one counts)."""
-        if not self.stepping:
-            return True
-        return box.item in self.step_path()[:self.step_pos + 1]
-
-    def _paint_boxes(self, painter: QPainter) -> None:
-        current = self.step_path()[self.step_pos] if self.stepping else None
-        for box in self._boxes:
-            lit = box.item == current or (self.linked_run is not None and self._run_boxes.get(self.linked_run) is box)
-            if box.is_box:
-                rect = QRectF(box.x, box.top, box.width, box.height)
-                painter.setPen(QPen(_SELECTED_BORDER if lit else _BORDER, 1.2))
-                painter.setBrush(QBrush(_LINK_BAND if lit else _BOX_BG))
-                painter.drawRoundedRect(rect, 4, 4)
-                painter.setPen(QPen(_BORDER, 1))
-                divider = box.x + BOX_PAD + box.left_w + BOX_GAP / 2
-                painter.drawLine(QPointF(box.x, box.top + self._line_h + 2), QPointF(box.x + box.width, box.top + self._line_h + 2))
-                painter.drawLine(QPointF(divider, box.top + self._line_h + 2), QPointF(divider, box.top + box.height))
-                painter.setFont(self._font)
-                painter.setPen(FUNCTION_FORMAT.foreground().color())
-                painter.drawText(QRectF(box.x + BOX_PAD, box.title_y - self._line_h / 2, box.width, self._line_h),
-                                 Qt.AlignLeft | Qt.AlignVCenter, box.action.call)
-                # Arguments get their values once the run has reached this line.
-                for line_y, spans in (box.lines if self._box_reached(box) else box.bare):
-                    self._draw_spans(painter, box.x + BOX_PAD, line_y, spans)
-                out_x = divider + BOX_GAP / 2
-            else:
-                if lit:
-                    painter.setPen(Qt.NoPen)
-                    painter.setBrush(QBrush(_LINK_BAND))
-                    painter.drawRect(QRectF(1, box.top, self._size[0] - 2, self._line_h))
-                self._draw_spans(painter, box.x, box.title_y, box.lines[0][1])
-                out_x = box.x + box.left_w + BOX_GAP
-            if self._box_shows_result(box):
-                for line_y, spans in box.outputs:
-                    self._draw_spans(painter, out_x, line_y, spans)
+    def _line_status(self, index: int) -> str:
+        """The run's status for card item index ("ran", "taken", "skipped", ...)."""
+        step = self._run_results().steps.get(self._items[index][1].span)
+        return step.status if step is not None else "unknown"
 
     # --- step-through ---------------------------------------------------------------
 
@@ -942,43 +865,122 @@ class FunctionCard(QGraphicsObject):
     # --- Ctrl+click value overlays ------------------------------------------------
 
     def toggle_value_overlay(self, word: str | None) -> str:
-        """Shows (or hides) an input's value over every use of it on this
-        card, and says what happened - or why nothing did."""
+        """Shows (or hides) a value over every use on this card of word: a
+        variable (an input, a local, a #define) gets the value it had at that
+        line; a call - strlen(dataCSV) - gets what that call returned. A line
+        gets its values once the run has reached it, and its calls' values
+        (and what it writes) once the run has stepped past it. Says what
+        happened - or why nothing did."""
         if not word:
-            return "Ctrl+click an input's name to show its value here"
+            return "Ctrl+click a name or a call to show its value here"
         if word in self.value_overlays:
             self.value_overlays.discard(word)
             self.update()
             return f"{word}: value hidden"
-        if word not in {p.name for p in self.parameters}:
-            return f"{word}: not an input - only inputs with a value card show a value"
-        if word not in self.input_values:
+        if any(kind == "call" for kind, _, _, _ in self._uses_of(word)):
+            if word != "sizeof" and not knows(word):
+                return f"{word}(): not standard C - out of scope for now"
+            self.value_overlays.add(word)
+            self.update()
+            calls = sum(1 for name, _, _ in self._overlay_boxes() if name == word)
+            if not calls:
+                return f"{word}(): shows what it returns once the run gets past it  (Ctrl+click again to hide)"
+            return f"{word}(): shows what it returns on {calls} call{'' if calls == 1 else 's'}  (Ctrl+click again to hide)"
+        parameters = {p.name for p in self.parameters}
+        if word not in parameters | {v.name for v in self._locals} | set(self.defines):
+            return f"{word}: not a variable or a call on this card"
+        if word in parameters and word not in self.input_values:
             return f"{word}: no value yet - drag its blue dot out and type one"
         self.value_overlays.add(word)
         self.update()
         uses = sum(1 for name, _, _ in self._overlay_boxes() if name == word)
-        return (f"{word} = {self.input_values[word]}  (shown on {uses} use{'' if uses == 1 else 's'}; "
-                "Ctrl+click again to hide)")
+        shown_on = f"shown on {uses} use{'' if uses == 1 else 's'}; Ctrl+click again to hide"
+        if word in parameters:
+            return f"{word} = {self.input_values[word]}  ({shown_on})"
+        if not uses:
+            return f"{word}: no value yet where it's used - step through and it takes hold  (Ctrl+click again to hide)"
+        return f"{word}: {shown_on}"
+
+    def _logic_runs(self) -> dict:
+        """{run index: item index, or None for an output label} for every
+        card line a value can show on: the logic rows, the call / assignment
+        lines and the outputs - not the title, the variables list or the
+        input rows (those already read "= value")."""
+        items = {run: item for item, run in self._item_runs.items()}
+        return {run: items.get(run) for run in range(self._first_logic_run(), len(self._runs))}
+
+    def _uses_of(self, word: str):
+        """(kind, run index, start, end) for each use of word on the card's
+        lines: kind "call" when it's called - start..end then covers the whole
+        call, word(...) - else "name". Not inside "quotes"."""
+        pattern = _whole_word(word)
+        for run in self._logic_runs():
+            text = self._runs[run][2]
+            strings = [m.span() for m in _STRING_LITERAL.finditer(text)]
+            for m in pattern.finditer(text):
+                if any(a <= m.start() < b for a, b in strings):
+                    continue  # inside "quotes": text, not the name
+                rest = text[m.end():]
+                if rest.lstrip().startswith("("):
+                    end = _call_end(text, len(text) - len(rest.lstrip()))
+                    if end is not None:  # (cut short with "…" otherwise)
+                        yield "call", run, m.start(), end
+                    continue
+                yield "name", run, m.start(), m.end()
+
+    def _reached(self, item: int) -> bool:
+        """Stepping: the run has got to this line (the current one counts).
+        Not stepping: always - a value shows wherever it's known."""
+        return not self.stepping or item in self.step_path()[:self.step_pos + 1]
+
+    def _passed(self, item: int) -> bool:
+        """The run has gone past this line (not stepping: it ran at all)."""
+        if not self.stepping:
+            return item in self.step_path() and self._line_status(item) != "skipped"
+        return item in self.step_path()[:self.step_pos]
+
+    def _value_at(self, kind: str, word: str, text: str, item: int | None) -> str | None:
+        """What a use of word shows on the card line holding it, or None."""
+        if item is None:  # an output label: the values the run left with
+            if kind == "call" or (self.stepping and not self.at_output):
+                return None
+            state = self._run_results().state
+            return _c_value(state[word]) if word in state else None
+        self._run_results()
+        before, after = self._states.get(item, ({}, {}))
+        if kind == "call":
+            if not self._passed(item):
+                return None
+            computed = compute_expression(text, before, self._types)
+            return _c_value(computed.value) if computed.known else None
+        if not self._reached(item):
+            return None
+        action = self._items[item][1] if self._items[item][0] == "action" else None
+        step = self._trace.steps.get(action.span) if action is not None else None
+        written = action is not None and (word == action.target or (step is not None and word in step.changes))
+        state = after if written and self._passed(item) else before
+        return _c_value(state[word]) if word in state else None
 
     def _overlay_boxes(self):
-        """(name, rect, value) for every use on the card of an input whose
-        value is showing. Its own input row already reads "= value", and the
-        title and variable list aren't uses, so those are left alone."""
-        shown_locals = len(self._locals) if self._show_variables else 0
-        first_use = 1 + shown_locals + len(self._inputs)  # runs: title, variables, inputs, then logic + outputs
+        """(name, rect, value) for every use on the card of a name or call
+        whose value is showing and known at that line. A call's value covers
+        the whole call, so anything shown inside it (an argument, a call
+        within it) gives way."""
+        logic = self._logic_runs()
+        shown = []
         for name in sorted(self.value_overlays):
-            value = self.input_values.get(name)
-            if value is None:
-                continue  # its value card was cleared or closed: nothing to show
-            pattern = _whole_word(name)
-            for x, y, text, _, _ in self._runs[first_use:]:
-                strings = [m.span() for m in _STRING_LITERAL.finditer(text)]
-                for m in pattern.finditer(text):
-                    if any(a <= m.start() < b for a, b in strings):
-                        continue  # inside "quotes": text, not the variable
-                    left = x + self._metrics.horizontalAdvance(text[:m.start()])
-                    width = self._metrics.horizontalAdvance(m.group(0))
-                    yield name, QRectF(left - 1, y - self._line_h / 2 + 1, width + 2, self._line_h - 2), value
+            for kind, run, start, end in self._uses_of(name):
+                value = self._value_at(kind, name, self._runs[run][2][start:end], logic[run])
+                if value is not None:
+                    shown.append((name, run, start, end, value))
+        for name, run, start, end, value in shown:
+            if any(r == run and s <= start and end <= e and (s, e) != (start, end)
+                   for _, r, s, e, _ in shown):
+                continue  # inside a call that's showing its value
+            x, y, text, _, _ = self._runs[run]
+            left = x + self._metrics.horizontalAdvance(text[:start])
+            width = self._metrics.horizontalAdvance(text[start:end])
+            yield name, QRectF(left - 1, y - self._line_h / 2 + 1, width + 2, self._line_h - 2), value
 
     def _paint_value_overlays(self, painter: QPainter) -> None:
         painter.setFont(self._font)
@@ -1040,7 +1042,7 @@ class FunctionCard(QGraphicsObject):
             self._draw_spans(painter, CARD_PADDING, y, spans)
             y += self._line_h
 
-        if not (self._inputs or self._rows):
+        if not (self._inputs or self._rows or self._lines):
             return
         if self._logic_top > title_h + 1:
             painter.setPen(QPen(_BORDER, 1))
@@ -1050,7 +1052,8 @@ class FunctionCard(QGraphicsObject):
             self._draw_spans(painter, CARD_PADDING, y, spans)
             self._draw_port(painter, 0, y, _INPUT_PORT)
 
-        self._paint_boxes(painter)
+        for line in self._lines:
+            self._draw_spans(painter, line.x, line.y, line.spans)
         for row in self._rows:
             if row.diamond:
                 self._draw_diamond(painter, row.x - self._metrics.horizontalAdvance(" ") - 1, row.y)
