@@ -74,14 +74,20 @@ First version.
   faintly visible, the value on top in white, cut short with `…` where the name is narrower (hover for
   the whole value). Uses in comments and strings are left alone. Several can show at once; Ctrl+click
   one again to hide it. Changing the value card updates them straight away. Ctrl only needs to be
-  held when the button goes down (letting go of it first used to make it a plain click).
+  held when the button goes down (letting go of it first used to make it a plain click). A click whose
+  mouse drifts a pixel or two (less than the system drag distance) still counts as a click, for
+  Ctrl+click and plain clicks alike - it used to start a one-letter selection and be ignored, which is
+  why Ctrl+click never worked with a real mouse. A real drag still selects text to copy.
 - **Saving diagrams** (`diagram_file.py`): **File > Save** (Ctrl+S) and **Save As...** (Ctrl+Shift+S)
   write a `.skyfish` file (readable JSON) - the cards and where they sit, value cards with what was
   typed and their NULL tickbox, the wires, the zoom and the view. Save asks where the first time,
   starting in SkyFish's own `diagrams/` folder (not beside the code, which belongs to another project)
   with the code file's name (`stm32PacketDriver.skyfish`; `_2`, `_3`... when a same-named file from
-  another project already has one), then just updates it. Opening a code file brings its diagram back:
-  the file it was last saved to, else one in `diagrams/` made for it, else one beside the code.
+  another project already has one), then just updates it. Save only writes back to a diagram that's in
+  `diagrams/`; one opened from anywhere else (the Desktop, beside the code) makes Save ask, starting in
+  `diagrams/`; Save As always starts there. Opening a code file brings its diagram back: the file it
+  was last saved to, else one in `diagrams/` made for it, else one beside the code. **File > Open** (and
+  Open Recent) on a `.skyfish` opens its code file with that diagram, instead of showing the JSON.
   A card's function is matched by name in today's code, so an edited function's card shows its current
   code; a function that's gone (renamed or deleted) keeps its card, drawn from the saved code with a red
   X across everything below its title bar, no longer tied to the code. Value cards whose input is gone

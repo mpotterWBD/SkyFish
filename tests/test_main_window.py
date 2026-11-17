@@ -1000,3 +1000,74 @@ def test_diagrams_go_in_skyfishs_diagrams_folder(make_window, tmp_path):
     window3 = make_window()
     window3.open_file(code_b)
     assert window3.cards.cards == []  # not the other project's diagram
+
+
+def test_clicks_survive_a_real_mouse_drifting_a_pixel_or_two(make_window, tmp_path):
+    """A real mouse moves slightly between press and release; that used to
+    start a one-letter selection and the click was ignored."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    path = tmp_path / "drv.c"
+    path.write_text(OVERLAY_SOURCE)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    window.cards.add_value_card(card, "size").set_text("32")
+    viewer = window.viewer
+    point = viewer.cursorRect(viewer.cursor_for(3, 43)).center()
+
+    def drifting_click(modifier):
+        QTest.mousePress(viewer.viewport(), Qt.LeftButton, modifier, point)
+        QTest.mouseMove(viewer.viewport(), point + QPoint(6, 1))
+        QTest.mouseRelease(viewer.viewport(), Qt.LeftButton, modifier, point + QPoint(6, 1))
+
+    drifting_click(Qt.ControlModifier)
+    assert [name for name, _ in viewer.overlays] == ["size"]
+    assert not viewer.textCursor().hasSelection()
+
+    drifting_click(Qt.NoModifier)  # a plain click still lights the card line
+    assert card.linked_run is not None
+    assert not viewer.textCursor().hasSelection()
+
+    # (A real drag still selects text to copy - checked with real Windows input,
+    # since QTest's mouse moves don't carry a held button.)
+
+
+def test_opening_a_skyfish_file_opens_its_code_and_diagram(make_window, tmp_path):
+    path = _saved_diagram(make_window, tmp_path)
+    window = make_window()
+    window._settings.clear()  # no remembered link: it has to come from the .skyfish itself
+    window.open_file(tmp_path / "drv.skyfish")  # what File > Open / Open Recent do with it
+    assert window.current_file == path  # the code file, not the JSON
+    assert window.viewer.toPlainText() == path.read_text()
+    assert sorted(c.function.name for c in window.cards.cards) == ["addKeyValuePair", "helper"]
+    assert window.diagram_path == tmp_path / "drv.skyfish"
+    assert "Bad" not in window.message.text()
+
+
+def test_save_goes_to_the_diagrams_folder(make_window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from skyfish.ui import main_window as mw
+    asked = []
+
+    def fake_dialog(parent, title, start, filters):
+        asked.append(start)
+        return start, filters  # the person accepts the suggestion
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fake_dialog)
+    path = _saved_diagram(make_window, tmp_path)  # saved beside the code, like the old default / the Desktop
+    window = make_window()
+    window.open_file(path)
+    assert window.diagram_path == tmp_path / "drv.skyfish"
+
+    window.save_diagram()  # not in diagrams/: asks, starting there
+    assert asked == [str(mw.DIAGRAMS_DIR / "drv.skyfish")]
+    assert window.diagram_path == mw.DIAGRAMS_DIR / "drv.skyfish"
+    assert (mw.DIAGRAMS_DIR / "drv.skyfish").is_file()
+
+    window.save_diagram()  # now it's in diagrams/: saved straight there, no asking
+    assert len(asked) == 1
+    window.save_diagram_as()  # Save As always asks, starting there
+    assert asked[-1] == str(mw.DIAGRAMS_DIR / "drv.skyfish")

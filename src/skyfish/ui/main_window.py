@@ -70,9 +70,10 @@ _SHOW_METHODS_KEY = "show_methods"
 _SHOW_VARIABLES_KEY = "show_variables"
 _SHOW_LOGIC_KEY = "show_logic"
 
-_FILE_FILTER = (
-    "Supported code (" + " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTS)) + ");;All files (*)"
-)
+_CODE_PATTERNS = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTS))
+# File > Open takes code files and saved diagrams (a .skyfish opens its code with that diagram).
+_FILE_FILTER = (f"Code and diagrams ({_CODE_PATTERNS} *.skyfish);;Supported code ({_CODE_PATTERNS});;"
+                "SkyFish diagrams (*.skyfish);;All files (*)")
 
 
 def _plural(count: int, word: str) -> str:
@@ -342,10 +343,29 @@ class MainWindow(QMainWindow):
         self._fill_list()
         self._show_message(_START_MESSAGE)
 
-    def open_file(self, path: Path) -> None:
-        """Shows path's code on the left, and a summary of its functions and
-        methods on the right; the diagram starts empty."""
+    def open_diagram(self, path: Path) -> None:
+        """Opens a saved .skyfish: its code file, with this diagram on it."""
         path = Path(path)
+        try:
+            state = diagram_file.load(path)
+        except diagram_file.DiagramFileError as problem:
+            self._show_message(str(problem))
+            return
+        code = diagram_file.code_file_for(path, state)
+        if not code.is_file():
+            self._show_message(f"{path.name} is a diagram of {code.name}, which isn't at {code.parent} any more.")
+            return
+        self.open_file(code, diagram=(path, state))
+
+    def open_file(self, path: Path, diagram: tuple | None = None) -> None:
+        """Shows path's code on the left, and a summary of its functions and
+        methods on the right, with its saved diagram if it has one (or
+        diagram: (path, state) to use a particular one). A .skyfish path opens
+        that diagram with its code."""
+        path = Path(path)
+        if path.suffix == diagram_file.SUFFIX:
+            self.open_diagram(path)
+            return
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -385,16 +405,28 @@ class MainWindow(QMainWindow):
             parts.append(_plural(declarations, "declaration"))
         parts.append(_plural(variables, "variable"))
         self._show_message(" · ".join(parts) + f" in {path.name}")
-        self._load_diagram_for(path)
+        if diagram is not None:
+            self._restore_diagram(*diagram)  # opened from that .skyfish
+        else:
+            self._load_diagram_for(path)
 
     # --- saving diagrams (File > Save / Save As) ---------------------------------
 
     def save_diagram(self) -> None:
-        """File > Save: to the diagram's file, or ask where the first time."""
-        if self.diagram_path is not None:
+        """File > Save: back to the diagram's file when it's in SkyFish's
+        diagrams folder; otherwise (first save, or a diagram from somewhere
+        else, like the Desktop) ask, starting in that folder."""
+        if self.diagram_path is not None and self._in_diagrams_folder(self.diagram_path):
             self.write_diagram(self.diagram_path)
         else:
             self.save_diagram_as()
+
+    @staticmethod
+    def _in_diagrams_folder(path: Path) -> bool:
+        try:
+            return Path(path).resolve().parent == DIAGRAMS_DIR.resolve()
+        except OSError:
+            return False
 
     def save_diagram_as(self) -> None:
         """File > Save As: always asks where, starting in SkyFish's diagrams
@@ -403,7 +435,8 @@ class MainWindow(QMainWindow):
             self._show_message("Open a code file first - a diagram is saved with the code it's about.")
             return
         DIAGRAMS_DIR.mkdir(parents=True, exist_ok=True)
-        start = self.diagram_path or self.suggested_diagram_path(self.current_file)
+        start = (self.diagram_path if self.diagram_path is not None and self._in_diagrams_folder(self.diagram_path)
+                 else self.suggested_diagram_path(self.current_file))
         path, _ = QFileDialog.getSaveFileName(self, "Save diagram", str(start),
                                               f"SkyFish diagram (*{diagram_file.SUFFIX})")
         if path:

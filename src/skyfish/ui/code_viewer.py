@@ -3,7 +3,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QRect, QRegularExpression, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
-from PySide6.QtWidgets import QMenu, QPlainTextEdit, QTextEdit, QToolTip, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QPlainTextEdit, QTextEdit, QToolTip, QWidget
 
 from skyfish.analysis.logic import Span
 from skyfish.ui.highlighter import COMMENT, STRING, CodeHighlighter
@@ -67,6 +67,7 @@ class CodeViewer(QPlainTextEdit):
         self._overlays: dict[tuple[str, Span], list[tuple[int, int]]] = {}
         self.value_lookup: Callable[[str, Span], str | None] | None = None
         self._ctrl_press = False  # Ctrl was held when the mouse button went down
+        self._press_pos = None    # where the left button went down (a click is judged from there)
         self.setReadOnly(True)
         self.viewport().setMouseTracking(True)  # hovering an overlay shows its full value
         self.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
@@ -191,27 +192,44 @@ class CodeViewer(QPlainTextEdit):
         self.centerCursor()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._press_pos = event.position().toPoint() if event.button() == Qt.LeftButton else None
         # Whether Ctrl was down when the button went down - people often let
         # go of Ctrl a moment before the button, so the release can't be trusted.
-        self._ctrl_press = bool(event.modifiers() & Qt.ControlModifier)
+        self._ctrl_press = event.button() == Qt.LeftButton and bool(event.modifiers() & Qt.ControlModifier)
+        if self._ctrl_press:
+            event.accept()  # Ctrl+click is ours: no text selection, no caret move
+            return
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().mouseReleaseEvent(event)
-        if event.button() == Qt.LeftButton and not self.textCursor().hasSelection():
-            cursor = self.cursorForPosition(event.position().toPoint())
-            line, col = cursor.blockNumber() + 1, cursor.positionInBlock()
-            cursor.select(QTextCursor.WordUnderCursor)
-            word = cursor.selectedText()
-            word = word if _IDENTIFIER.fullmatch(word) else ""
-            ctrl = self._ctrl_press or bool(event.modifiers() & Qt.ControlModifier)
-            self._ctrl_press = False
-            if ctrl:
-                # Ctrl+click: show (or hide) that variable's value over its uses.
-                if word:
-                    self.value_peek_requested.emit(line, col, word)
-            else:
-                self.code_clicked.emit(line, col, word)
+        ctrl = self._ctrl_press
+        self._ctrl_press = False
+        if not ctrl:
+            super().mouseReleaseEvent(event)
+        if event.button() != Qt.LeftButton or self._press_pos is None:
+            return
+        press, self._press_pos = self._press_pos, None
+        # A real mouse drifts a pixel or two during a click. Less than the
+        # system's drag distance is a click, not a selection - judged from
+        # where the button went down, and any one-letter selection it made
+        # is dropped.
+        if (event.position().toPoint() - press).manhattanLength() >= QApplication.startDragDistance():
+            return  # a real drag: a selection to copy, not a click
+        if not ctrl and self.textCursor().hasSelection():
+            cursor = self.textCursor()
+            cursor.clearSelection()
+            self.setTextCursor(cursor)
+        cursor = self.cursorForPosition(press)
+        line, col = cursor.blockNumber() + 1, cursor.positionInBlock()
+        cursor.select(QTextCursor.WordUnderCursor)
+        word = cursor.selectedText()
+        word = word if _IDENTIFIER.fullmatch(word) else ""
+        if ctrl:
+            # Ctrl+click: show (or hide) that variable's value over its uses.
+            if word:
+                self.value_peek_requested.emit(line, col, word)
+        else:
+            self.code_clicked.emit(line, col, word)
 
     # --- value overlays (Ctrl+click a variable) -------------------------------
 
@@ -285,7 +303,8 @@ class CodeViewer(QPlainTextEdit):
         painter.end()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
-        super().mouseMoveEvent(event)
+        if not self._ctrl_press:  # while a Ctrl+click is held, don't drag a selection
+            super().mouseMoveEvent(event)
         if not self._overlays:
             return
         point = event.position().toPoint()
