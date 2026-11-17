@@ -1343,12 +1343,12 @@ def test_the_arrow_beside_a_card_opens_its_memory_matrix(make_window, tmp_path):
 
     assert not card.memory_open and card.memory is None
     shut_arrow = card.memory_tab_rect()
-    assert shut_arrow.left() > card.size[0]  # just right of the card
+    assert shut_arrow.left() == card.size[0] and shut_arrow.bottom() < card.title_height  # on the title bar's right end
     click_arrow()
     matrix = card.memory
     assert card.memory_open and isinstance(matrix, MemoryMatrix) and matrix.isVisible()
-    assert matrix.pos().x() > card.size[0] and matrix.boundingRect().height() > card.size[1]  # card + step bar
-    assert card.memory_tab_rect().left() > matrix.pos().x() + matrix.width  # the arrow moves out past it
+    assert matrix.boundingRect().height() > card.size[1]  # card + step bar
+    assert matrix.pos().x() == card.memory_tab_rect().right()  # the tab joins card and matrix
     assert matrix.memory == {} and EMPTY == "--"  # nothing in it yet
     assert address_text(0) == "0x0000" and address_text(0xFFFF) == "0xFFFF"
     matrix.scroll_by(-5)

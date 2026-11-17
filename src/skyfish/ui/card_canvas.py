@@ -94,8 +94,8 @@ MAX_INPUT_VALUE_CHARS = 32  # a typed-in value shown on its input's row
 WIRE_GAP = 14            # between a row's text and its wire, and around lanes
 LANE_STEP = 10           # between the vertical wires of different outputs
 PORT_RADIUS = 4.5
-MEMORY_GAP = 10          # between the card (its output dots) and the memory arrow / matrix
-MEMORY_TAB_WIDTH = 18    # the arrow on the card's right side that opens the memory matrix
+MEMORY_TAB_WIDTH = 14    # the small tab on the title bar's right end that opens the memory matrix;
+                         # the matrix sits just past it, so the tab joins the two
 
 
 def _card_font() -> QFont:
@@ -860,12 +860,11 @@ class FunctionCard(QGraphicsObject):
         return self._size[1] + (STEP_BAR_HEIGHT if self.has_step_bar() else 0)
 
     def memory_tab_rect(self) -> QRectF:
-        """The arrow on the card's right side - beside the card when the
-        matrix is shut, beside the matrix when it's open."""
-        x = self._size[0] + MEMORY_GAP
-        if self.memory_open and self.memory is not None:
-            x += self.memory.width + MEMORY_GAP
-        return QRectF(x, self._title_h, MEMORY_TAB_WIDTH, self._full_height() - self._title_h)
+        """The small tab sticking out of the right end of the title bar -
+        the title bar never has output dots, so it stays clear of them. With
+        the matrix open, it's the bridge between the card and the matrix."""
+        inset = 4
+        return QRectF(self._size[0], inset, MEMORY_TAB_WIDTH, self._title_h - 2 * inset)
 
     def toggle_memory(self) -> None:
         """Opens (or shuts) the memory matrix beside the card."""
@@ -881,23 +880,32 @@ class FunctionCard(QGraphicsObject):
 
     def _place_memory(self) -> None:
         if getattr(self, "memory", None) is not None:
-            self.memory.setPos(self._size[0] + MEMORY_GAP, 0)
+            self.memory.setPos(self.memory_tab_rect().right(), 0)
             self.memory.set_height(self._full_height())
 
     def _paint_memory_tab(self, painter: QPainter) -> None:
-        """A tall, thin chevron: > to open, < to shut."""
+        """A small tab in the title bar's colour, joined to the card (no
+        border on its card side), with a chevron: > to open, < to shut."""
         rect = self.memory_tab_rect()
-        pen = QPen(_STEP_ICON, 2.2)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(_TITLE_BG))
+        painter.drawRect(rect.adjusted(-1, 0, 0, 0))  # over the card's border: one piece
+        border = QPen(_SELECTED_BORDER if self.isSelected() else _BORDER, 1.5)
+        painter.setPen(border)
+        if self.memory_open:  # a bridge: edges top and bottom only
+            painter.drawLine(rect.topLeft(), rect.topRight())
+            painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        else:
+            painter.drawPolyline([rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()])
+        pen = QPen(_STEP_ICON, 1.6)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
-        inset = min(40.0, rect.height() / 4)
-        top, bottom, mid = rect.top() + inset, rect.bottom() - inset, rect.center().y()
-        left, right = rect.left() + 4, rect.right() - 4
+        c, h, w = rect.center(), 3.5, 2.0
+        left, right = c.x() - w, c.x() + w
         if self.memory_open:
             left, right = right, left  # points back at the card: shut
-        painter.drawPolyline([QPointF(left, top), QPointF(right, mid), QPointF(left, bottom)])
+        painter.drawPolyline([QPointF(left, c.y() - h), QPointF(right, c.y()), QPointF(left, c.y() + h)])
 
     # --- painting -------------------------------------------------------
 

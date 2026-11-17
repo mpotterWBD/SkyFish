@@ -83,9 +83,9 @@ First version.
   it; not stepping, everything the run worked out shows. A value showing for a whole call covers
   anything shown inside it. A call to something that isn't standard C (HAL, your other files) says
   "out of scope for now". Overlays skip text inside quotes.
-- **Memory matrix beside each card**: a tall arrow on a card's right side opens a memory panel
-  attached to it (as tall as the card and its step bar); the arrow moves past the panel and points back
-  to shut it. Deliberately abstract, not the chip's real memory map: 16-bit addresses from `0x0000` to
+- **Memory matrix beside each card**: a small `>` tab on the right end of a card's title bar (clear of
+  the output dots) opens a memory panel beside the card, as tall as the card and its step bar; the tab
+  stays put, joining card and panel, and turns to `<` to shut it. Deliberately abstract, not the chip's real memory map: 16-bit addresses from `0x0000` to
   `0xFFFF`, 8 bytes a row in hex, then the same bytes as text. The scroll wheel over it scrolls the rows
   instead of zooming. Empty for now (every byte `--`); the card's variables go in later, and cards
   tied together will share one matrix.
