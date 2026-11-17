@@ -263,7 +263,7 @@ def test_clicking_a_word_highlights_it_everywhere_in_the_card(make_window, tmp_p
     assert card.highlight_count() == 3
     # Whole words only: "out" doesn't count inside "out_size".
     card.set_highlight("out")
-    assert card.highlight_count() == 1
+    assert card.highlight_count() == 2  # its input, and "out[out_size - 1U] = 0" (a card line now)
     # Blank space isn't a word.
     from PySide6.QtCore import QPointF
     assert card.word_at(QPointF(card.size[0] - 2, card.title_height + 3)) is None
@@ -1145,12 +1145,13 @@ def test_ctrl_click_on_a_card_shows_an_inputs_value_on_the_card(make_window, tmp
     size = view.add_value_card(card, "size")
     size.set_text("32")
     ctrl_click("size", 1)
-    assert card.last_note == "size = 32  (shown on 1 use; Ctrl+click again to hide)"
-    [(name, _, value)] = list(card._overlay_boxes())
-    assert (name, value) == ("size", "32")  # on the if row only - its input row already says "= 32"
+    assert card.last_note == "size = 32  (shown on 2 uses; Ctrl+click again to hide)"
+    # The if row and snprintf's argument - not its input row (already "= 32"),
+    # and not the "size" inside quotes.
+    assert [(name, value) for name, _, value in card._overlay_boxes()] == [("size", "32"), ("size", "32")]
 
     size.set_text("0x40")  # a new value shows straight away
-    assert [v for _, _, v in card._overlay_boxes()] == ["64"]
+    assert [v for _, _, v in card._overlay_boxes()] == ["64", "64"]
 
     ctrl_click("NULL", 0)
     assert card.last_note.startswith("NULL: not an input")
@@ -1239,7 +1240,9 @@ def test_step_through_a_card_line_by_line(make_window, tmp_path):
     _press(window, card, "forward")  # the front of the card: the first if, not yet decided
     assert _lit(card) == "if dataCSV == NULL || KEY == NULL || size == 0"
     assert [_code_text(window.viewer, s) for s in window.viewer.linked_spans][0].startswith("if(dataCSV")
-    _press(window, card, "forward")  # past it (false): the next if
+    _press(window, card, "forward")  # past it (false): the strlen line
+    assert _lit(card) == "strlen"  # the strlen box (used = strlen(dataCSV))
+    _press(window, card, "forward")  # the next if
     assert _lit(card) == "if used + 1 > size"
     _press(window, card, "forward")  # past that (false): otherwise
     assert _lit(card) == "otherwise"

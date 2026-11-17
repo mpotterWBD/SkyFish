@@ -69,6 +69,15 @@ First version.
   used in that function. Click in the code and the matching line on that function's card lights up (the
   declaration, if header or return clicked on, else the innermost if around it), and the word is marked
   on the card and through the function's code. Clicking in the code doesn't move the diagram.
+- **Black boxes - calls and assignments on cards**: between a card's if rows, in code order, every call
+  and assignment now has its own line. A call is a box: its name on top, its arguments down the left
+  (each with its value when known, e.g. `sizeof(number) = 12`, `VALUE = 100`) and what it returns or
+  changes down the right (`returns 3`, `number ← "100"`, `used = 4`). Standard C functions are worked
+  out by their contract (Copilot's `stdlib_c.py`) without going inside; anything else shows `?`. An
+  assignment without a single call (`pairLength = strlen(KEY) + 1 + ...`) is one line with its result
+  (`= 9`). Lines sit indented under the if they're in, and tie to their code like any card line. The
+  step-through steps through them too: a line's result appears once you step past it, and its arguments'
+  values once the run reaches it. Ctrl+click value overlays skip text inside quotes.
 - **Step-through on every card**: a bar under each card (not crossed-out ones, and only while Logic is
   ticked) with **|◀ ◀ ▶ ▶|**. A step is one card line: ▶ moves to the next card line the run passes, ◀
   back one, ▶| straight to where the function leaves, |◀ back to the front of the card. An if isn't
