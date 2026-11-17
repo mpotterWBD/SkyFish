@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | (none)                        |                  | fit diagram to cards on open done, committed |
+| Claude  | (none)                        |                  | card step-through done, committed |
 | Copilot | (none)                        |                  | B1 sizeof done, committed (fef62db) |
 
 ## Backlog

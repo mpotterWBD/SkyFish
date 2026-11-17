@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from skyfish.analysis.functions import FUNCTION, LOCAL, PARAMETER, FunctionInfo
 from skyfish.analysis.logic import LogicRow, logic_rows, outputs
+from skyfish.analysis.simulate import simulate
 from skyfish.ui.highlighter import FUNCTION as FUNCTION_FORMAT
 from skyfish.ui.highlighter import colour_spans
 from skyfish.ui.card_style import CLOSE_GAP, CLOSE_SIZE
@@ -59,6 +60,11 @@ _DIAMOND = QColor("#C586C0")   # same as if/else in the code
 _HIGHLIGHT_FILL = QColor(80, 191, 255, 55)
 _HIGHLIGHT_BORDER = QColor(80, 191, 255, 150)
 _QUIET_TEXT = QColor("#9a9a9a")
+_STEP_BAR_BG = QColor("#252525")
+_STEP_ICON = QColor("#e0e0e0")
+_STEP_ICON_OFF = QColor("#5a5a5a")
+_OUTPUT_LIT = QColor("#35C053")              # the output a run leaves by
+_OUTPUT_LIT_FILL = QColor(53, 192, 83, 60)
 # Ctrl+click value overlay: the name faded under the card background, the value in white.
 _OVERLAY_FADE = QColor(30, 30, 30, 215)
 _OVERLAY_TEXT = QColor("#FFFFFF")
@@ -74,6 +80,9 @@ SCENE_SIZE = 10_000      # the canvas area cards can be placed and panned in
 ZOOM_MIN, ZOOM_MAX = 0.25, 3.0
 ZOOM_STEP = 1.15         # per scroll-wheel notch
 FIT_MARGIN = 40          # space around the cards when the view fits them
+STEP_BAR_HEIGHT = 30     # the step-through bar under each card
+STEP_BUTTON_WIDTH = 44
+OUT = "out"              # in a step path: the function's output, after its last card line
 INDENT_CHARS = 3         # per nesting level in the logic rows
 MAX_CONDITION_CHARS = 56  # longer conditions end in "…"
 MAX_OUTPUT_CHARS = 24
@@ -161,6 +170,16 @@ class FunctionCard(QGraphicsObject):
         # Inputs Ctrl+clicked to show their value over their uses on this card.
         self.value_overlays: set[str] = set()
         self.last_note = ""  # what the last Ctrl+click did, as shown at the pointer
+        # Step-through (the bar under the card): set by the canvas, the input
+        # values to run with ({name: value}, None for NULL) and the file's
+        # #define values. step_pos is where you are on the path - None before
+        # you start; the path is the card lines a run passes, ending with OUT
+        # (its output) - see _step_path().
+        self.inputs_provider = None
+        self.defines: dict = {}
+        self.step_pos: int | None = None
+        self._step_path: list | None = None  # worked out when needed; None = out of date
+        self.step_note = ""                   # why the run can't go on, when it can't
         self._input_drag: tuple[str, object] | None = None  # (parameter name, the line being drawn)
         self._layout()
 
@@ -197,6 +216,10 @@ class FunctionCard(QGraphicsObject):
             self.input_values.pop(name, None)
         else:
             self.input_values[name] = shown
+        # New inputs, new run: if you were stepping, start again at the front.
+        self._step_path = None
+        if self.step_pos is not None:
+            self.step_to(0)
         self.prepareGeometryChange()
         self._layout()
         self.update()
@@ -432,6 +455,153 @@ class FunctionCard(QGraphicsObject):
         painter.setBrush(QBrush(_LINK_BAND))
         painter.drawRect(QRectF(1, y - self._line_h / 2, self._size[0] - 2, self._line_h))
 
+    # --- step-through ---------------------------------------------------------------
+
+    def step_path(self) -> list:
+        """The card lines a run passes with today's inputs, in order (indexes
+        into logic_rows), ending with OUT when it reaches an output. An if is
+        only decided when you step past it, so it's on the path whether it
+        was taken or not; lines it skipped aren't. A line the run can't
+        decide (an input with no value, a name from a header) ends the path
+        there, and step_note says what it needs."""
+        if self._step_path is None:
+            self._step_path, self.step_note = [], ""
+            inputs = self.inputs_provider() if self.inputs_provider is not None else {}
+            trace = simulate(self.function, inputs, self.defines)
+            for index, row in enumerate(self.logic_rows):
+                step = trace.steps.get(row.span)
+                if step is None or step.status == "skipped":
+                    continue
+                self._step_path.append(index)
+                if step.status == "unknown":
+                    blockers = ", ".join(step.unresolved) or "a value it doesn't have"
+                    self.step_note = f"can't tell from here - needs {blockers}"
+                    break
+                if step.status == "taken" and row.exit is not None:
+                    self._step_path.append(OUT)  # it leaves through its output
+                    break
+            self._step_output = trace.output
+        return self._step_path
+
+    @property
+    def stepping(self) -> bool:
+        return self.step_pos is not None
+
+    def step_to(self, position: int) -> None:
+        """Moves to position on the path (clamped), lights that card line
+        and shows its code - or, at the end, lights the output it leaves by."""
+        path = self.step_path()
+        if not path:
+            self.step_pos = None
+            self.update()
+            return
+        self.step_pos = max(0, min(position, len(path) - 1))
+        here = path[self.step_pos]
+        if here == OUT:
+            # The return this run actually left by: the one on the card line before OUT.
+            self.linked_run = None
+            exit_row = self.logic_rows[path[self.step_pos - 1]] if self.step_pos > 0 else None
+            spans = [exit_row.exit_span] if exit_row is not None and exit_row.exit_span else []
+        else:
+            self.linked_run = self._first_logic_run() + here
+            spans = [s for s in self._runs[self.linked_run][3] if s is not None]
+        self.update()
+        if self.on_clicked is not None:
+            self.on_clicked(self, spans, None)  # the code view shows where the run is
+
+    def step_forward(self) -> None:
+        self.step_to(0 if self.step_pos is None else self.step_pos + 1)
+
+    def step_back(self) -> None:
+        self.step_to(0 if self.step_pos is None else self.step_pos - 1)
+
+    def step_to_end(self) -> None:
+        self.step_to(len(self.step_path()) - 1)
+
+    def step_to_start(self) -> None:
+        self.step_to(0)
+
+    @property
+    def step_output(self) -> str | None:
+        """The output the run reached - lit when you've stepped to it."""
+        self.step_path()
+        return self._step_output if self._step_path and self._step_path[-1] == OUT else None
+
+    @property
+    def at_output(self) -> bool:
+        path = self.step_path() if self.stepping else []
+        return bool(path) and path[self.step_pos] == OUT
+
+    def _first_logic_run(self) -> int:
+        shown_locals = len(self._locals) if self._show_variables else 0
+        return 1 + shown_locals + len(self._inputs)  # runs: title, variables, inputs, then logic rows
+
+    def has_step_bar(self) -> bool:
+        return not self.stale and self._show_logic and bool(self.logic_rows)
+
+    def step_bar_rect(self) -> QRectF:
+        width, height = self._size
+        return QRectF(0, height, width, STEP_BAR_HEIGHT)
+
+    def step_buttons(self) -> list[tuple[str, QRectF]]:
+        """(action, rect) for the four buttons, centred on the bar."""
+        bar = self.step_bar_rect()
+        left = bar.center().x() - 2 * STEP_BUTTON_WIDTH
+        return [(name, QRectF(left + i * STEP_BUTTON_WIDTH, bar.top() + 3, STEP_BUTTON_WIDTH, bar.height() - 6))
+                for i, name in enumerate(("start", "back", "forward", "end"))]
+
+    def _paint_step_bar(self, painter: QPainter) -> None:
+        bar = self.step_bar_rect()
+        painter.setPen(QPen(_BORDER, 1.2))
+        painter.setBrush(QBrush(_STEP_BAR_BG))
+        painter.drawRoundedRect(bar.adjusted(0.5, 0, -0.5, 0), 5, 5)
+        path = self.step_path() if self.stepping else []
+        can_back = self.stepping and self.step_pos > 0
+        can_forward = not self.stepping or self.step_pos < len(path) - 1
+        enabled = {"start": self.stepping, "back": can_back, "forward": can_forward, "end": can_forward}
+        for name, rect in self.step_buttons():
+            painter.setPen(QPen(_BORDER, 1))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+            pen = QPen(_STEP_ICON if enabled[name] else _STEP_ICON_OFF, 1.8)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.setPen(pen)
+            c, s = rect.center(), 5.0
+            left_chevron = [QPointF(c.x() + s / 2, c.y() - s), QPointF(c.x() - s / 2, c.y()), QPointF(c.x() + s / 2, c.y() + s)]
+            right_chevron = [QPointF(c.x() - s / 2, c.y() - s), QPointF(c.x() + s / 2, c.y()), QPointF(c.x() - s / 2, c.y() + s)]
+            if name in ("start", "back"):
+                painter.drawPolyline(left_chevron)
+            else:
+                painter.drawPolyline(right_chevron)
+            if name == "start":
+                painter.drawLine(QPointF(c.x() - s, c.y() - s), QPointF(c.x() - s, c.y() + s))
+            if name == "end":
+                painter.drawLine(QPointF(c.x() + s, c.y() - s), QPointF(c.x() + s, c.y() + s))
+        if self.stepping and self.step_note and path and path[self.step_pos] != OUT and self.step_pos == len(path) - 1:
+            # Stuck: say why, at the left of the bar.
+            painter.setFont(self._italic)
+            painter.setPen(_QUIET_TEXT)
+            room = self.step_buttons()[0][1].left() - bar.left() - CARD_PADDING
+            text = self._metrics.elidedText(self.step_note, Qt.ElideRight, room)
+            painter.drawText(QRectF(bar.left() + CARD_PADDING / 2, bar.top(), room, bar.height()),
+                             Qt.AlignLeft | Qt.AlignVCenter, text)
+
+    def _paint_step_output(self, painter: QPainter) -> None:
+        """At the end of a run: the output it leaves by, lit."""
+        if not self.at_output or self.step_output not in self._ports:
+            return
+        name = self.step_output
+        y = self._ports[name]
+        x = self._output_label_x[name]
+        w = self._width_of(self._output_spans[name])
+        painter.setPen(QPen(_OUTPUT_LIT, 1.5))
+        painter.setBrush(QBrush(_OUTPUT_LIT_FILL))
+        painter.drawRoundedRect(QRectF(x - 4, y - self._line_h / 2, w + 8, self._line_h), 3, 3)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(_OUTPUT_LIT))
+        painter.drawEllipse(QPointF(self._size[0], y), PORT_RADIUS + 2.5, PORT_RADIUS + 2.5)
+
     def _in_title(self, pos: QPointF) -> bool:
         return pos.y() <= self._title_h
 
@@ -439,6 +609,13 @@ class FunctionCard(QGraphicsObject):
         if event.button() == Qt.LeftButton and self.close_rect().contains(event.pos()):
             if self.on_close is not None:
                 self.on_close(self)
+            event.accept()
+            return
+        if event.button() == Qt.LeftButton and self.has_step_bar() and self.step_bar_rect().contains(event.pos()):
+            for name, rect in self.step_buttons():
+                if rect.contains(event.pos()):
+                    {"start": self.step_to_start, "back": self.step_back,
+                     "forward": self.step_forward, "end": self.step_to_end}[name]()
             event.accept()
             return
         if (event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier
@@ -516,7 +693,8 @@ class FunctionCard(QGraphicsObject):
             if rect.contains(event.pos()):
                 QToolTip.showText(QCursor.pos(), value)  # the whole value, when it's cut short
                 break
-        if self.close_rect().contains(event.pos()):
+        if self.close_rect().contains(event.pos()) or (
+                self.has_step_bar() and any(r.contains(event.pos()) for _, r in self.step_buttons())):
             self.setCursor(Qt.PointingHandCursor)
         elif not self.stale and self.input_at(event.pos()) is not None:
             self.setCursor(Qt.CrossCursor)  # drag out a value card
@@ -531,8 +709,10 @@ class FunctionCard(QGraphicsObject):
 
     def boundingRect(self) -> QRectF:  # noqa: N802 - Qt override
         width, height = self._size
-        # +border, and the port dots that sit half outside the edges.
-        return QRectF(-PORT_RADIUS - 1, -1, width + 2 * PORT_RADIUS + 2, height + 2)
+        if self.has_step_bar():
+            height += STEP_BAR_HEIGHT  # the step-through bar hangs under the card
+        # +border, and the port dots that sit half outside the edges (bigger when lit).
+        return QRectF(-PORT_RADIUS - 4, -1, width + 2 * PORT_RADIUS + 8, height + 2)
 
     def _draw_spans(self, painter: QPainter, x: float, y_centre: float, spans) -> None:
         top = y_centre - self._line_h / 2
@@ -597,6 +777,9 @@ class FunctionCard(QGraphicsObject):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         self._paint_card(painter)
         self._paint_value_overlays(painter)
+        self._paint_step_output(painter)
+        if self.has_step_bar():
+            self._paint_step_bar(painter)
         _draw_close(painter, self.close_rect())
         if self.stale:
             # Gone from the code: a big X across everything but the title bar.
@@ -712,6 +895,7 @@ class CardCanvas(QGraphicsView):
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self._cards: dict[tuple[str, int], FunctionCard] = {}
         self._fit_until_moved = False  # keep fitting the cards on resize until you zoom or pan
+        self.defines: dict = {}  # the open file's #define values, for step-throughs (set by the window)
         # Value cards and their wires, by (function card key, parameter name).
         self._value_cards: dict[tuple[tuple[str, int], str], tuple[ValueCard, Wire]] = {}
         self._filters = (True, True, True, True)
@@ -736,6 +920,8 @@ class CardCanvas(QGraphicsView):
             card.on_input_dropped = self.add_value_card
             card.on_clicked = lambda c, spans, word: self.card_clicked.emit(c, spans, word)
             card.on_values_changed = self.values_changed.emit
+            card.inputs_provider = lambda c=card: self.input_values_of(c)
+            card.defines = self.defines
             self._cards[key] = card
             self.scene().addItem(card)
             self._apply_to(card)
@@ -766,6 +952,12 @@ class CardCanvas(QGraphicsView):
         around = [c for c in self.cards
                   if not c.stale and c.function.span is not None and c.function.span.contains(line, col)]
         return min(around, key=lambda c: c.function.span.size) if around else None
+
+    def input_values_of(self, card: FunctionCard) -> dict:
+        """{input name: value} from card's value cards that have a good value
+        (None for NULL) - what a step-through runs with."""
+        return {v.parameter.name: (None if v.is_null else v.value)
+                for v in self.value_cards_of(card) if v.has_value}
 
     def value_cards_of(self, card: FunctionCard) -> list[ValueCard]:
         return [vc for (key, _), (vc, _) in self._value_cards.items() if key == card.key]
@@ -847,6 +1039,7 @@ class CardCanvas(QGraphicsView):
 
     def _place(self, card: FunctionCard) -> None:
         width, height = card.size
+        height += STEP_BAR_HEIGHT if card.has_step_bar() else 0
         visible_width = max(self.viewport().width() / self.zoom, 400)  # in canvas units
         if self._next.x() > CARD_GAP and self._next.x() + width > visible_width:
             self._next = QPointF(CARD_GAP / 2, self._next.y() + self._row_height + CARD_GAP)

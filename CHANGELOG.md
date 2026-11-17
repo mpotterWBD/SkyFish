@@ -69,6 +69,14 @@ First version.
   used in that function. Click in the code and the matching line on that function's card lights up (the
   declaration, if header or return clicked on, else the innermost if around it), and the word is marked
   on the card and through the function's code. Clicking in the code doesn't move the diagram.
+- **Step-through on every card**: a bar under each card (not crossed-out ones, and only while Logic is
+  ticked) with **|◀ ◀ ▶ ▶|**. A step is one card line: ▶ moves to the next card line the run passes, ◀
+  back one, ▶| straight to where the function leaves, |◀ back to the front of the card. An if isn't
+  decided until you step past it; when it's true and returns, the next step lights the output it leaves
+  by (boxed in green, its dot enlarged). The lit line's code is highlighted and centred in the code view.
+  It runs with the value cards' values and the file's `#define`s (Copilot's `simulate()`); where it
+  can't tell (an input with no value, a name from a header) it stops on that line and the bar says what
+  it needs. Changing an input goes back to the front of the card.
 - **Ctrl+click an input on a card to see its value there**: on a function card, Ctrl+click an input's
   name (in an if condition, say) and its value card's value is shown over every use of it on that card -
   the name faded but faintly visible, the value on top in white, cut short with `…` where the name is

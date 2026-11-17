@@ -32,6 +32,7 @@ from skyfish.analysis.functions import (
     find_functions,
 )
 from skyfish import diagram_file
+from skyfish.analysis.defines import defines as defines_of
 from skyfish.ui.card_canvas import CardCanvas
 from skyfish.ui.code_viewer import CodeViewer
 from skyfish.ui.highlighter import FUNCTION as FUNCTION_FORMAT
@@ -392,6 +393,10 @@ class MainWindow(QMainWindow):
         self.cards.clear_cards()  # cards belong to the file they came from
         self._functions = []
         self._fill_list()
+        # The file's #define values, for step-throughs (C only; nothing for Python).
+        self.cards.defines.clear()
+        if self._language == "c":
+            self.cards.defines.update(defines_of(text))
 
         try:
             self._functions = find_functions(text, path.suffix)

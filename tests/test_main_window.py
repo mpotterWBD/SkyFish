@@ -1181,3 +1181,116 @@ def test_diagram_fits_the_cards_when_opened_and_as_the_window_resizes(make_windo
     zoom = view.zoom
     window.resize(1000, 700)
     assert view.zoom == zoom
+
+
+STEP_SOURCE = (
+    "#define LIMIT 4\n"                                                   # 1
+    "bool add(char *dataCSV, uint16_t size, const char *KEY) {\n"         # 2
+    "    size_t used;\n"                                                  # 3
+    "    if(dataCSV == NULL || KEY == NULL || size == 0) {\n"             # 4
+    "        return false;\n"                                             # 5
+    "    }\n"                                                             # 6
+    "    used = strlen(dataCSV);\n"                                       # 7
+    "    if(used + 1 > size) {\n"                                         # 8
+    "        return false;\n"                                             # 9
+    "    }\n"                                                             # 10
+    "    return true;\n"                                                  # 11
+    "}\n"                                                                 # 12
+    "int clamp(int v) {\n"                                                # 13
+    "    if (v > LIMIT) { return LIMIT; }\n"                              # 14
+    "    if (v > MAXIMUM) { return 0; }\n"                                # 15
+    "    return v;\n"                                                     # 16
+    "}\n"                                                                 # 17
+)
+
+
+def _step_window(make_window, tmp_path):
+    path = tmp_path / "step.c"
+    path.write_text(STEP_SOURCE)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    return window
+
+
+def _press(window, card, button):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    rect = dict(card.step_buttons())[button]
+    view = window.cards
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, view.mapFromScene(card.mapToScene(rect.center())))
+
+
+def _lit(card):
+    """What the step is on: the card line's text, or ("OUT", the output)."""
+    if card.at_output:
+        return ("OUT", card.step_output)
+    return card._runs[card.linked_run][2]
+
+
+def test_step_through_a_card_line_by_line(make_window, tmp_path):
+    window = _step_window(make_window, tmp_path)
+    card = _add(window, "add")
+    for name, text in (("dataCSV", "text"), ("size", "64"), ("KEY", "K")):
+        window.cards.add_value_card(card, name).set_text(text)
+    assert card.has_step_bar() and not card.stepping
+
+    _press(window, card, "forward")  # the front of the card: the first if, not yet decided
+    assert _lit(card) == "if dataCSV == NULL || KEY == NULL || size == 0"
+    assert [_code_text(window.viewer, s) for s in window.viewer.linked_spans][0].startswith("if(dataCSV")
+    _press(window, card, "forward")  # past it (false): the next if
+    assert _lit(card) == "if used + 1 > size"
+    _press(window, card, "forward")  # past that (false): otherwise
+    assert _lit(card) == "otherwise"
+    _press(window, card, "forward")  # out through true
+    assert _lit(card) == ("OUT", "true")
+    assert [_code_text(window.viewer, s) for s in window.viewer.linked_spans] == ["return true;"]
+    _press(window, card, "forward")  # nowhere further
+    assert _lit(card) == ("OUT", "true")
+
+    _press(window, card, "back")
+    assert _lit(card) == "otherwise"
+    _press(window, card, "start")  # the front of the card again
+    assert _lit(card) == "if dataCSV == NULL || KEY == NULL || size == 0"
+    _press(window, card, "end")  # straight to where it leaves
+    assert _lit(card) == ("OUT", "true")
+
+
+def test_step_follows_the_inputs(make_window, tmp_path):
+    window = _step_window(make_window, tmp_path)
+    card = _add(window, "add")
+    window.cards.add_value_card(card, "dataCSV").set_text("text")
+    size = window.cards.add_value_card(card, "size")
+    size.set_text("2")
+    window.cards.add_value_card(card, "KEY").set_text("K")
+
+    _press(window, card, "end")  # strlen("text") + 1 > 2: leaves through false at the second if
+    assert _lit(card) == ("OUT", "false")
+    assert [_code_text(window.viewer, s) for s in window.viewer.linked_spans] == ["return false;"]
+    _press(window, card, "back")
+    assert _lit(card) == "if used + 1 > size"  # the second if, the one that sent it out
+
+    size.set_text("64")  # a new input: back to the front of the card
+    assert _lit(card) == "if dataCSV == NULL || KEY == NULL || size == 0"
+    _press(window, card, "end")
+    assert _lit(card) == ("OUT", "true")
+
+
+def test_step_stops_where_it_cant_tell_and_says_why(make_window, tmp_path):
+    window = _step_window(make_window, tmp_path)
+    card = _add(window, "clamp")
+    window.cards.add_value_card(card, "v").set_text("3")
+    _press(window, card, "end")  # LIMIT is a #define in the file: 3 > 4 is false; MAXIMUM isn't known
+    assert _lit(card) == "if v > MAXIMUM"
+    assert card.step_note == "can't tell from here - needs MAXIMUM"
+    window.cards.cards[0].step_forward()
+    assert _lit(card) == "if v > MAXIMUM"  # can't go further
+
+
+def test_no_step_bar_on_crossed_out_cards_or_without_logic(make_window, tmp_path):
+    window = _step_window(make_window, tmp_path)
+    card = _add(window, "add")
+    assert card.has_step_bar()
+    window.show_logic.setChecked(False)
+    assert not card.has_step_bar()
