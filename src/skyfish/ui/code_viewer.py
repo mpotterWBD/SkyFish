@@ -66,6 +66,7 @@ class CodeViewer(QPlainTextEdit):
         # it ("\"TEMP\"", "32", "NULL"), or None when it has none.
         self._overlays: dict[tuple[str, Span], list[tuple[int, int]]] = {}
         self.value_lookup: Callable[[str, Span], str | None] | None = None
+        self._ctrl_press = False  # Ctrl was held when the mouse button went down
         self.setReadOnly(True)
         self.viewport().setMouseTracking(True)  # hovering an overlay shows its full value
         self.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
@@ -189,6 +190,12 @@ class CodeViewer(QPlainTextEdit):
         self.setTextCursor(cursor)
         self.centerCursor()
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        # Whether Ctrl was down when the button went down - people often let
+        # go of Ctrl a moment before the button, so the release can't be trusted.
+        self._ctrl_press = bool(event.modifiers() & Qt.ControlModifier)
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().mouseReleaseEvent(event)
         if event.button() == Qt.LeftButton and not self.textCursor().hasSelection():
@@ -197,7 +204,9 @@ class CodeViewer(QPlainTextEdit):
             cursor.select(QTextCursor.WordUnderCursor)
             word = cursor.selectedText()
             word = word if _IDENTIFIER.fullmatch(word) else ""
-            if event.modifiers() & Qt.ControlModifier:
+            ctrl = self._ctrl_press or bool(event.modifiers() & Qt.ControlModifier)
+            self._ctrl_press = False
+            if ctrl:
                 # Ctrl+click: show (or hide) that variable's value over its uses.
                 if word:
                     self.value_peek_requested.emit(line, col, word)

@@ -834,3 +834,26 @@ def test_ctrl_click_shows_a_value_over_every_use(make_window, tmp_path):
     # Opening a file clears them.
     window.open_file(path)
     assert viewer.overlays == {}
+
+
+def test_ctrl_click_works_when_ctrl_is_let_go_first(make_window, tmp_path):
+    """People often release Ctrl a moment before the mouse button."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    path = tmp_path / "drv.c"
+    path.write_text(OVERLAY_SOURCE)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    window.cards.add_value_card(card, "size").set_text("32")
+    viewer = window.viewer
+    point = viewer.cursorRect(viewer.cursor_for(3, 43)).center()
+    point.setX(point.x() + 2)
+    QTest.mousePress(viewer.viewport(), Qt.LeftButton, Qt.ControlModifier, point)
+    QTest.mouseRelease(viewer.viewport(), Qt.LeftButton, Qt.NoModifier, point)
+    assert [name for name, _ in viewer.overlays] == ["size"]
+    # And a plain click afterwards is a plain click again.
+    QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.NoModifier, point)
+    assert [name for name, _ in viewer.overlays] == ["size"]
