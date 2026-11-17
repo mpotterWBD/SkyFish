@@ -77,7 +77,9 @@ First version.
   held when the button goes down (letting go of it first used to make it a plain click). A click whose
   mouse drifts a pixel or two (less than the system drag distance) still counts as a click, for
   Ctrl+click and plain clicks alike - it used to start a one-letter selection and be ignored, which is
-  why Ctrl+click never worked with a real mouse. A real drag still selects text to copy.
+  why Ctrl+click never worked with a real mouse. A real drag still selects text to copy. Every
+  Ctrl+click shows a short note at the pointer saying what it did ("size = 32 (shown on 3 uses...)",
+  "value hidden") or why it showed nothing (not an input, no value yet, the function has no card).
 - **Saving diagrams** (`diagram_file.py`): **File > Save** (Ctrl+S) and **Save As...** (Ctrl+Shift+S)
   write a `.skyfish` file (readable JSON) - the cards and where they sit, value cards with what was
   typed and their NULL tickbox, the wires, the zoom and the view. Save asks where the first time,

@@ -1095,3 +1095,28 @@ def test_open_file_and_open_project_are_separate(make_window, tmp_path, monkeypa
     assert asked == [("Open project", str(mw.DIAGRAMS_DIR), "SkyFish projects (*.skyfish)")]
     assert window.current_file == path
     assert sorted(c.function.name for c in window.cards.cards) == ["addKeyValuePair", "helper"]
+
+
+def test_every_ctrl_click_says_what_happened(make_window, tmp_path):
+    path = tmp_path / "drv.c"
+    path.write_text(OVERLAY_SOURCE + "int other(int size) {\n    return size;\n}\n")
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    note = lambda: window.viewer.last_note  # noqa: E731
+
+    _ctrl_click_code(window, 3, 43)  # size, before there's a card
+    assert note() == "size: addKeyValuePair has no card - add one to set its inputs"
+    card = _add(window, "addKeyValuePair")
+    _ctrl_click_code(window, 3, 43)
+    assert note().startswith("size: no value yet")
+    window.cards.add_value_card(card, "size").set_text("32")
+    _ctrl_click_code(window, 3, 43)
+    assert note() == "size = 32  (shown on 3 uses; Ctrl+click again to hide)"
+    _ctrl_click_code(window, 3, 43)
+    assert note() == "size: value hidden"
+    _ctrl_click_code(window, 3, 4)  # "if" - not an input
+    assert note().startswith("if: not an input of addKeyValuePair")
+    _ctrl_click_code(window, 10, 11)  # size in other(), which has no card
+    assert note().startswith("size: other has no card")

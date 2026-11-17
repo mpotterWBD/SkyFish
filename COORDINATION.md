@@ -23,7 +23,7 @@ every task and before every commit.
 
 | Agent   | Files / area                  | Since            | Status |
 |---------|-------------------------------|------------------|--------|
-| Claude  | (none)                        |                  | Open File / Open Project split done, committed |
+| Claude  | (none)                        |                  | Ctrl+click note done, committed |
 | Copilot | (none)                        |                  | B1 sizeof done, committed (fef62db) |
 
 ## Backlog

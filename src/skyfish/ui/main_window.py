@@ -683,12 +683,29 @@ class MainWindow(QMainWindow):
     def _on_value_peek(self, line: int, col: int, word: str) -> None:
         """Ctrl+click on word: show its value over every use in this function
         - only for an input that has a value - or hide it if it's showing."""
+        self.viewer.show_note(self._value_peek(line, col, word))
+
+    def _value_peek(self, line: int, col: int, word: str) -> str:
+        """Does the Ctrl+click, and says what happened, for the note at the
+        pointer - so a Ctrl+click that shows nothing always says why."""
         function = self._function_at(line, col)
         if function is None:
-            return
-        showing = (word, function.span) in self.viewer.overlays
-        if showing or self._value_for(word, function.span) is not None:
-            self.viewer.toggle_overlay(word, function.span)
+            return f"{word}: not inside a function"
+        within = function.span
+        if (word, within) in self.viewer.overlays:
+            self.viewer.toggle_overlay(word, within)
+            return f"{word}: value hidden"
+        card = self.cards.card_for(function)
+        if card is None:
+            return f"{word}: {function.name} has no card - add one to set its inputs"
+        if word not in {p.name for p in card.parameters}:
+            return f"{word}: not an input of {function.name} - only inputs with a value card show a value"
+        value = self._value_for(word, within)
+        if value is None:
+            return f"{word}: no value yet - drag its blue dot on the card out and type one"
+        self.viewer.toggle_overlay(word, within)
+        uses = len(self.viewer.overlays.get((word, within), []))
+        return f"{word} = {value}  (shown on {_plural(uses, 'use')}; Ctrl+click again to hide)"
 
     def _function_at(self, line: int, col: int) -> FunctionInfo | None:
         around = [f for f in self._functions if f.has_body and f.span is not None and f.span.contains(line, col)]

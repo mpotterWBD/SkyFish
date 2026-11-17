@@ -2,7 +2,7 @@ import re
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QRect, QRegularExpression, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QTextCursor, QTextFormat
+from PySide6.QtGui import QAction, QColor, QCursor, QPainter, QTextCursor, QTextFormat
 from PySide6.QtWidgets import QApplication, QMenu, QPlainTextEdit, QTextEdit, QToolTip, QWidget
 
 from skyfish.analysis.logic import Span
@@ -68,6 +68,7 @@ class CodeViewer(QPlainTextEdit):
         self.value_lookup: Callable[[str, Span], str | None] | None = None
         self._ctrl_press = False  # Ctrl was held when the mouse button went down
         self._press_pos = None    # where the left button went down (a click is judged from there)
+        self.last_note = ""       # the last Ctrl+click note shown
         self.setReadOnly(True)
         self.viewport().setMouseTracking(True)  # hovering an overlay shows its full value
         self.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
@@ -232,6 +233,11 @@ class CodeViewer(QPlainTextEdit):
             self.code_clicked.emit(line, col, word)
 
     # --- value overlays (Ctrl+click a variable) -------------------------------
+
+    def show_note(self, text: str) -> None:
+        """A short note at the mouse pointer - what a Ctrl+click did."""
+        self.last_note = text
+        QToolTip.showText(QCursor.pos(), text, self.viewport())
 
     def toggle_overlay(self, name: str, within: Span) -> bool:
         """Shows name's value over every use of it inside within (a
