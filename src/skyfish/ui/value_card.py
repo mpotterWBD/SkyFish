@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from skyfish.analysis.functions import VariableInfo
+from skyfish.ui.card_style import CLOSE_GAP, CLOSE_SIZE, draw_close as _draw_close
 from skyfish.analysis.values import OTHER, InvalidValue, ValueType, describe, parse_value, value_type_for
 
 # Same palette as the function cards.
@@ -80,6 +81,7 @@ class ValueCard(QGraphicsObject):
         self.value = None          # the parsed value, when good
         self.error: str | None = None
         self.on_moved = None       # set by the canvas: redraw the wire
+        self.on_close = None       # set by the canvas: the title bar's X was clicked
         self._dragging = False
         self._font = _font()
         self._metrics = QFontMetricsF(self._font)
@@ -191,7 +193,10 @@ class ValueCard(QGraphicsObject):
         painter.setPen(_NAME)
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, self.parameter.name)
         painter.setPen(_TYPE)
-        painter.drawText(text_rect, Qt.AlignRight | Qt.AlignVCenter, self.value_type.type_name)
+        type_rect = QRectF(text_rect.left(), text_rect.top(), text_rect.width() - CLOSE_SIZE - CLOSE_GAP,
+                           text_rect.height())
+        painter.drawText(type_rect, Qt.AlignRight | Qt.AlignVCenter, self.value_type.type_name)
+        _draw_close(painter, self.close_rect())
 
         if self.error:
             colour, message = _BAD, self.error
@@ -210,7 +215,16 @@ class ValueCard(QGraphicsObject):
 
     # --- moving by the title bar only -----------------------------------------
 
+    def close_rect(self) -> QRectF:
+        return QRectF(VALUE_CARD_WIDTH - PADDING - CLOSE_SIZE, (self._title_h - CLOSE_SIZE) / 2,
+                      CLOSE_SIZE, CLOSE_SIZE)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.LeftButton and self.close_rect().contains(event.pos()):
+            if self.on_close is not None:
+                self.on_close(self)
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and event.pos().y() <= self._title_h:
             self._dragging = True
             self.setCursor(Qt.ClosedHandCursor)
@@ -238,7 +252,10 @@ class ValueCard(QGraphicsObject):
             event.accept()
 
     def hoverMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
-        self.setCursor(Qt.OpenHandCursor if event.pos().y() <= self._title_h else Qt.ArrowCursor)
+        if self.close_rect().contains(event.pos()):
+            self.setCursor(Qt.PointingHandCursor)
+        else:
+            self.setCursor(Qt.OpenHandCursor if event.pos().y() <= self._title_h else Qt.ArrowCursor)
 
 
 class Wire(QGraphicsPathItem):

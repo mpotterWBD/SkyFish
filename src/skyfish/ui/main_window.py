@@ -1,4 +1,6 @@
+import json
 import re
+import textwrap
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
@@ -29,6 +31,7 @@ from skyfish.analysis.functions import (
     UnsupportedLanguage,
     find_functions,
 )
+from skyfish import diagram_file
 from skyfish.ui.card_canvas import CardCanvas
 from skyfish.ui.code_viewer import CodeViewer
 from skyfish.ui.highlighter import FUNCTION as FUNCTION_FORMAT
@@ -41,6 +44,7 @@ _LAST_FILE_KEY = "last_file"
 # The summary line with no file open (at start, and after File > New).
 _START_MESSAGE = "Open a file, then right-click a function in the code > Add Card."
 _RECENT_KEY = "recent_files"
+_DIAGRAMS_KEY = "diagram_files"  # {code file: the .skyfish its diagram was last saved to}, as JSON
 RECENT_FILES_MAX = 8  # how many File > Open Recent lists
 # The dividers: left column | analysis, and code | list. (New keys: the older
 # "divider" / "dividers" held earlier layouts, which don't fit this one.)
@@ -88,6 +92,8 @@ class MainWindow(QMainWindow):
         self.resize(1100, 700)
         self.setStyleSheet(_THEME_PATH.read_text())
         self.current_file: Path | None = None
+        self.diagram_path: Path | None = None  # the .skyfish the diagram was loaded from or saved to
+        self._code_text = ""  # the open file's text, for saving each card's code
         self._settings = settings if settings is not None else QSettings("Westbound Designs", "SkyFish")
         self._functions: list[FunctionInfo] = []
         self._language: str | None = None  # of the open file, for colouring cards
@@ -205,6 +211,13 @@ class MainWindow(QMainWindow):
         self.recent_menu = file_menu.addMenu("Open &Recent")
         self.recent_menu.aboutToShow.connect(self._fill_recent_menu)
         file_menu.addSeparator()
+        save = file_menu.addAction("&Save")
+        save.setShortcut(QKeySequence.Save)
+        save.triggered.connect(self.save_diagram)
+        save_as = file_menu.addAction("Save &As...")
+        save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        save_as.triggered.connect(self.save_diagram_as)
+        file_menu.addSeparator()
         exit_action = file_menu.addAction("E&xit")
         exit_action.triggered.connect(self.close)
 
@@ -314,6 +327,8 @@ class MainWindow(QMainWindow):
         list and an empty diagram. The last file is forgotten too, so the
         next start-up is blank as well (Open Recent still lists it)."""
         self.current_file = None
+        self.diagram_path = None
+        self._code_text = ""
         self._settings.remove(_LAST_FILE_KEY)
         self.setWindowTitle(self._base_title)
         self.viewer.show_code("", "")
@@ -333,6 +348,8 @@ class MainWindow(QMainWindow):
             self._show_message(f"Could not open {path.name}: {exc.strerror or exc}")
             return
         self.current_file = path
+        self.diagram_path = None
+        self._code_text = text
         self._settings.setValue(_LAST_FILE_KEY, str(path))
         self._remember_recent(path)
         self.setWindowTitle(f"{path.name} - {self._base_title}")
@@ -364,6 +381,144 @@ class MainWindow(QMainWindow):
             parts.append(_plural(declarations, "declaration"))
         parts.append(_plural(variables, "variable"))
         self._show_message(" · ".join(parts) + f" in {path.name}")
+        self._load_diagram_for(path)
+
+    # --- saving diagrams (File > Save / Save As) ---------------------------------
+
+    def save_diagram(self) -> None:
+        """File > Save: to the diagram's file, or ask where the first time."""
+        if self.diagram_path is not None:
+            self.write_diagram(self.diagram_path)
+        else:
+            self.save_diagram_as()
+
+    def save_diagram_as(self) -> None:
+        """File > Save As: always asks where, suggesting beside the code."""
+        if self.current_file is None:
+            self._show_message("Open a code file first - a diagram is saved with the code it's about.")
+            return
+        start = self.diagram_path or diagram_file.default_path(self.current_file)
+        path, _ = QFileDialog.getSaveFileName(self, "Save diagram", str(start),
+                                              f"SkyFish diagram (*{diagram_file.SUFFIX})")
+        if path:
+            self.write_diagram(Path(path))
+
+    def write_diagram(self, path: Path) -> None:
+        """Saves the diagram to path, and remembers it as this code file's diagram."""
+        path = Path(path)
+        if path.suffix != diagram_file.SUFFIX:
+            path = path.with_suffix(diagram_file.SUFFIX)
+        try:
+            diagram_file.save(path, self._diagram_state(path))
+        except OSError as exc:
+            self._show_message(f"Couldn't save {path.name}: {exc.strerror or exc}")
+            return
+        self.diagram_path = path
+        diagrams = self._diagram_files()
+        diagrams[str(Path(self.current_file).resolve())] = str(path.resolve())
+        self._settings.setValue(_DIAGRAMS_KEY, json.dumps(diagrams))
+        self.card_count.setText(f"{_plural(len(self.cards.cards), 'card')} · saved to {path.name}")
+
+    def _diagram_files(self) -> dict[str, str]:
+        try:
+            return json.loads(self._settings.value(_DIAGRAMS_KEY, "{}") or "{}")
+        except ValueError:
+            return {}
+
+    def _source_of(self, function: FunctionInfo) -> str:
+        """function's code as it is in the open file."""
+        span = function.span
+        if span is None:
+            return ""
+        lines = self._code_text.split("\n")
+        if span.line == span.end_line:
+            return lines[span.line - 1][span.col:span.end_col]
+        return "\n".join([lines[span.line - 1][span.col:], *lines[span.line:span.end_line - 1],
+                          lines[span.end_line - 1][:span.end_col]])
+
+    def _diagram_state(self, path: Path) -> diagram_file.DiagramState:
+        cards = []
+        for card in self.cards.cards:
+            values = [diagram_file.ValueCardState(v.parameter.name, v.editor.text(), v.is_null, v.pos().x(), v.pos().y())
+                      for v in self.cards.value_cards_of(card)]
+            source = card.saved_source if card.stale else self._source_of(card.function)
+            cards.append(diagram_file.CardState(card.function.name, card.function.line, source,
+                                                card.pos().x(), card.pos().y(), values))
+        centre = self.cards.mapToScene(self.cards.viewport().rect().center())
+        return diagram_file.DiagramState(diagram_file.relative_code_file(path, self.current_file),
+                                         self.cards.zoom, (centre.x(), centre.y()), cards)
+
+    def _load_diagram_for(self, code_path: Path) -> None:
+        """Brings back code_path's diagram, if it has one: the file it was last
+        saved to, or one beside it with the same name."""
+        code_path = Path(code_path).resolve()
+        remembered = self._diagram_files().get(str(code_path))
+        for candidate in ([Path(remembered)] if remembered else []) + [diagram_file.default_path(code_path)]:
+            if not candidate.is_file():
+                continue
+            try:
+                state = diagram_file.load(candidate)
+            except diagram_file.DiagramFileError as problem:
+                self._show_message(str(problem))
+                return
+            if diagram_file.code_file_for(candidate, state) != code_path:
+                continue  # a diagram of another file that happens to share the name
+            self._restore_diagram(candidate, state)
+            return
+
+    def _restore_diagram(self, path: Path, state: diagram_file.DiagramState) -> None:
+        """Puts a saved diagram back. A card's function is matched by name in
+        today's code, so an edited function's card shows its current code; a
+        function that's gone (renamed or deleted) keeps its card, drawn from
+        the saved code and crossed out."""
+        gone, dropped = [], []
+        for saved in state.cards:
+            function = self._match_function(saved)
+            if function is not None:
+                card = self.cards.add_card(function, self._language)
+            else:
+                card = self.cards.add_card(self._stale_function(saved), self._language, stale=True)
+                card.saved_source = saved.source
+                gone.append(saved.function)
+            card.setPos(saved.x, saved.y)
+            names = {p.name for p in card.parameters}
+            for value in saved.values:
+                if value.parameter not in names:
+                    dropped.append(f"{saved.function}: {value.parameter}")
+                    continue  # the input isn't there any more
+                value_card = self.cards.add_value_card(card, value.parameter)
+                value_card.setPos(value.x, value.y)
+                value_card.set_text(value.text)
+                if value.null and value_card.null_box is not None:
+                    value_card.null_box.setChecked(True)
+        self.cards.scene().clearSelection()
+        self.cards.set_zoom(state.zoom)
+        self.cards.centerOn(*state.center)
+        self.diagram_path = path
+        notes = [self.message.text(), f"diagram {path.name}"]
+        if gone:
+            notes.append(f"crossed out (no longer in the code): {', '.join(gone)}")
+        if dropped:
+            notes.append(f"value cards dropped (input gone): {', '.join(dropped)}")
+        self._show_message(" · ".join(notes))
+
+    def _match_function(self, saved: diagram_file.CardState) -> FunctionInfo | None:
+        same_name = [f for f in self._functions if f.has_body and f.name == saved.function]
+        return min(same_name, key=lambda f: abs(f.line - saved.line)) if same_name else None
+
+    def _stale_function(self, saved: diagram_file.CardState) -> FunctionInfo:
+        """A gone function, read back from its saved code (so its card still
+        shows what it was), or just its name if that can't be read."""
+        suffix = self.current_file.suffix if self.current_file else ""
+        try:
+            found = [f for f in find_functions(textwrap.dedent(saved.source), suffix) if f.has_body]
+        except (UnsupportedLanguage, SyntaxError):
+            found = []
+        if found:
+            function = found[0]
+            function.name, function.line = saved.function, saved.line
+            return function
+        return FunctionInfo(saved.function, FUNCTION, saved.line)
 
     def _filter_box(self, text: str, key: str, default: bool) -> QCheckBox:
         box = QCheckBox(text)

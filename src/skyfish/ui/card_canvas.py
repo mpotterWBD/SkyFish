@@ -38,6 +38,8 @@ from skyfish.analysis.functions import FUNCTION, LOCAL, PARAMETER, FunctionInfo
 from skyfish.analysis.logic import LogicRow, logic_rows, outputs
 from skyfish.ui.highlighter import FUNCTION as FUNCTION_FORMAT
 from skyfish.ui.highlighter import colour_spans
+from skyfish.ui.card_style import CLOSE_GAP, CLOSE_SIZE
+from skyfish.ui.card_style import draw_close as _draw_close
 from skyfish.ui.value_card import ValueCard, Wire
 
 # Look - same dark palette as theme.qss.
@@ -56,6 +58,7 @@ _DIAMOND = QColor("#C586C0")   # same as if/else in the code
 _HIGHLIGHT_FILL = QColor(80, 191, 255, 55)
 _HIGHLIGHT_BORDER = QColor(80, 191, 255, 150)
 _QUIET_TEXT = QColor("#9a9a9a")
+_STALE_CROSS = QColor(248, 100, 100, 190)  # a card whose function is gone from the code
 _LINK_BAND = QColor(38, 79, 120, 150)  # the line tied to the code view - the code view's link blue  # "always", "otherwise", "in loop" ...
 
 # Layout knobs (pixels at 100% zoom).
@@ -109,9 +112,14 @@ class _Row:
 class FunctionCard(QGraphicsObject):
     """One function or method as a block - see the module doc for the parts."""
 
-    def __init__(self, function: FunctionInfo, language: str | None) -> None:
+    def __init__(self, function: FunctionInfo, language: str | None, stale: bool = False) -> None:
         super().__init__()
         self.function = function
+        # Gone from the code (renamed or deleted) since the diagram was saved:
+        # drawn from the saved code, crossed out, and no longer tied to the code.
+        self.stale = stale
+        self.saved_source = ""  # for a stale card, the code it was drawn from (saved again as is)
+        self.on_close = None    # set by the canvas: the title bar's X was clicked
         self._language = language
         self._show_variables = True
         self._show_logic = True
@@ -276,7 +284,9 @@ class FunctionCard(QGraphicsObject):
             self._output_spans = {name: colour_spans(_shorten(name, MAX_OUTPUT_CHARS), self._language)
                                   for name in exits}
 
-        width = max(CARD_MIN_WIDTH, content_right + CARD_PADDING)
+        # Room on the title bar for the name and the close X.
+        title_right = CARD_PADDING + self._metrics.horizontalAdvance(self.function.name) + CLOSE_GAP + CLOSE_SIZE
+        width = max(CARD_MIN_WIDTH, content_right + CARD_PADDING, title_right + CARD_PADDING)
         if self._ports:
             last_lane = max(self._lanes.values())
             self._port_label_x = last_lane + WIRE_GAP
@@ -418,7 +428,14 @@ class FunctionCard(QGraphicsObject):
         return pos.y() <= self._title_h
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
-        input_name = self.input_at(event.pos()) if event.button() == Qt.LeftButton else None
+        if event.button() == Qt.LeftButton and self.close_rect().contains(event.pos()):
+            if self.on_close is not None:
+                self.on_close(self)
+            event.accept()
+            return
+        # A crossed-out card's inputs can't take new value cards: its code is gone.
+        input_name = (self.input_at(event.pos())
+                      if event.button() == Qt.LeftButton and not self.stale else None)
         if input_name is not None:
             # A blue input dot: drag out a line; where it's dropped, a value
             # card appears (see CardCanvas.add_value_card).
@@ -447,7 +464,7 @@ class FunctionCard(QGraphicsObject):
             # Tie it to the code: light this line, and have the code view show
             # where it came from with the word marked.
             self.linked_run = self.run_at(event.pos())
-            if self.on_clicked is not None:
+            if self.on_clicked is not None and not self.stale:  # its code is gone
                 self.on_clicked(self, self.code_spans_at(event.pos()), self.highlight)
             event.accept()
             return
@@ -480,7 +497,9 @@ class FunctionCard(QGraphicsObject):
             event.accept()
 
     def hoverMoveEvent(self, event) -> None:  # noqa: N802 - Qt override
-        if self.input_at(event.pos()) is not None:
+        if self.close_rect().contains(event.pos()):
+            self.setCursor(Qt.PointingHandCursor)
+        elif not self.stale and self.input_at(event.pos()) is not None:
             self.setCursor(Qt.CrossCursor)  # drag out a value card
         elif self._in_title(event.pos()):
             self.setCursor(Qt.OpenHandCursor)
@@ -503,7 +522,25 @@ class FunctionCard(QGraphicsObject):
             painter.drawText(QRectF(x, top, 10_000, self._line_h), Qt.AlignLeft | Qt.AlignVCenter, text)
             x += self._metrics.horizontalAdvance(text)
 
+    def close_rect(self) -> QRectF:
+        """The close X at the right end of the title bar."""
+        return QRectF(self._size[0] - CARD_PADDING - CLOSE_SIZE, (self._title_h - CLOSE_SIZE) / 2,
+                      CLOSE_SIZE, CLOSE_SIZE)
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
+        self._paint_card(painter)
+        _draw_close(painter, self.close_rect())
+        if self.stale:
+            # Gone from the code: a big X across everything but the title bar.
+            width, height = self._size
+            if height > self._title_h + 1:
+                pen = QPen(_STALE_CROSS, 2.5)
+                pen.setCapStyle(Qt.RoundCap)
+                painter.setPen(pen)
+                painter.drawLine(QPointF(4, self._title_h + 4), QPointF(width - 4, height - 4))
+                painter.drawLine(QPointF(width - 4, self._title_h + 4), QPointF(4, height - 4))
+
+    def _paint_card(self, painter: QPainter) -> None:
         width, height = self._size
         painter.setRenderHint(QPainter.Antialiasing)
 
@@ -618,12 +655,13 @@ class CardCanvas(QGraphicsView):
     def cards(self) -> list[FunctionCard]:
         return list(self._cards.values())
 
-    def add_card(self, function: FunctionInfo, language: str | None) -> FunctionCard:
+    def add_card(self, function: FunctionInfo, language: str | None, stale: bool = False) -> FunctionCard:
         """Adds a card for function, or selects its card if it already has one."""
         key = (function.name, function.line)
         card = self._cards.get(key)
         if card is None:
-            card = FunctionCard(function, language)
+            card = FunctionCard(function, language, stale)
+            card.on_close = self.remove_card
             card.language = language
             card.on_moved = lambda c=card: self._update_wires(c)
             card.on_input_dropped = self.add_value_card
@@ -650,12 +688,14 @@ class CardCanvas(QGraphicsView):
 
     def card_for(self, function: FunctionInfo) -> FunctionCard | None:
         """The card showing function, if it has one."""
-        return self._cards.get((function.name, function.line))
+        card = self._cards.get((function.name, function.line))
+        return card if card is not None and not card.stale else None
 
     def card_at_code(self, line: int, col: int) -> FunctionCard | None:
         """The card for the function whose code holds line, col - the
         innermost, for a Python function nested in another."""
-        around = [c for c in self.cards if c.function.span is not None and c.function.span.contains(line, col)]
+        around = [c for c in self.cards
+                  if not c.stale and c.function.span is not None and c.function.span.contains(line, col)]
         return min(around, key=lambda c: c.function.span.size) if around else None
 
     def value_cards_of(self, card: FunctionCard) -> list[ValueCard]:
@@ -681,6 +721,7 @@ class CardCanvas(QGraphicsView):
             wire = Wire(value_card)
             self.scene().addItem(wire)
             value_card.on_moved = wire.update_path
+            value_card.on_close = self.remove_value_card
             self._value_cards[(card.key, name)] = (value_card, wire)
             wire.update_path()
         self.scene().clearSelection()

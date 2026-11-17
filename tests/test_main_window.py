@@ -486,7 +486,7 @@ def _items(menu):
 def test_menu_bar(make_window):
     window = make_window()
     assert [a.text().replace("&", "") for a in window.menu_bar.actions()] == ["File", "View", "Help"]
-    assert _items(_menu(window, "File")) == ["New", "Open File...", "Open Recent", "Exit"]
+    assert _items(_menu(window, "File")) == ["New", "Open File...", "Open Recent", "Save", "Save As...", "Exit"]
     assert window.open_action.shortcut().toString() == "Ctrl+O"
     assert _items(_menu(window, "View")) == [
         "Functions", "Methods", "Variables", "Logic", "Zoom In", "Zoom Out", "Reset Zoom"]
@@ -857,3 +857,112 @@ def test_ctrl_click_works_when_ctrl_is_let_go_first(make_window, tmp_path):
     # And a plain click afterwards is a plain click again.
     QTest.mouseClick(viewer.viewport(), Qt.LeftButton, Qt.NoModifier, point)
     assert [name for name, _ in viewer.overlays] == ["size"]
+
+
+SAVE_SOURCE = (
+    "bool addKeyValuePair(char *dataCSV, uint16_t size, const char *KEY, int VALUE) {\n"
+    "    if(dataCSV == NULL || size == 0) {\n"
+    "        return false;\n"
+    "    }\n"
+    "    return true;\n"
+    "}\n"
+    "\n"
+    "int helper(int a) {\n"
+    "    return a + 1;\n"
+    "}\n"
+)
+
+
+def _saved_diagram(make_window, tmp_path):
+    """Opens SAVE_SOURCE, builds a diagram and saves it beside the code."""
+    path = tmp_path / "drv.c"
+    path.write_text(SAVE_SOURCE)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    card = _add(window, "addKeyValuePair")
+    card.setPos(420, 60)
+    size = window.cards.add_value_card(card, "size")
+    size.setPos(30, 90)
+    size.set_text("32")
+    csv = window.cards.add_value_card(card, "dataCSV")
+    csv.setPos(30, 300)  # clear of the size card
+    csv.null_box.setChecked(True)
+    _add(window, "helper").setPos(420, 400)
+    window.cards.set_zoom(0.8)
+    window.write_diagram(tmp_path / "drv.skyfish")
+    return path
+
+
+def test_save_and_reopen_brings_the_diagram_back(make_window, tmp_path):
+    path = _saved_diagram(make_window, tmp_path)
+    assert (tmp_path / "drv.skyfish").is_file()
+
+    window = make_window()  # like the next time the file is opened
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    cards = {c.function.name: c for c in window.cards.cards}
+    assert sorted(cards) == ["addKeyValuePair", "helper"]
+    main = cards["addKeyValuePair"]
+    assert (main.pos().x(), main.pos().y()) == (420, 60)
+    values = {v.parameter.name: v for v in window.cards.value_cards_of(main)}
+    assert values["size"].value == 32 and (values["size"].pos().x(), values["size"].pos().y()) == (30, 90)
+    assert values["dataCSV"].is_null
+    assert main.input_values == {"size": "32", "dataCSV": "NULL"}
+    assert abs(window.cards.zoom - 0.8) < 1e-6
+    assert not any(c.stale for c in cards.values())
+    assert window.diagram_path == tmp_path / "drv.skyfish"
+
+
+def test_edited_function_updates_and_gone_function_is_crossed_out(make_window, tmp_path):
+    path = _saved_diagram(make_window, tmp_path)
+    # Edit addKeyValuePair (a new if) and rename helper.
+    path.write_text(SAVE_SOURCE.replace("        return false;\n    }\n",
+                                        "        return false;\n    }\n    if (size > 64) { return false; }\n")
+                               .replace("int helper(int a)", "int helper2(int a)"))
+    window = make_window()
+    window.open_file(path)
+    cards = {c.function.name: c for c in window.cards.cards}
+    main, old = cards["addKeyValuePair"], cards["helper"]
+    assert not main.stale and [r.keyword for r in main.logic_rows] == ["if", "if", "otherwise"]  # updated
+    assert old.stale and old.saved_source.startswith("int helper(int a)")  # kept, crossed out
+    assert "crossed out (no longer in the code): helper" in window.message.text()
+    # A crossed-out card isn't tied to today's code.
+    assert window.cards.card_at_code(9, 4) is None
+    # Saving again keeps it as it was.
+    window.write_diagram(tmp_path / "drv.skyfish")
+    window2 = make_window()
+    window2.open_file(path)
+    assert {c.function.name: c.stale for c in window2.cards.cards} == {"addKeyValuePair": False, "helper": True}
+
+
+def test_close_x_closes_cards(make_window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    path = _saved_diagram(make_window, tmp_path)
+    window = make_window()
+    window.resize(1600, 900)
+    window.show()
+    window.open_file(path)
+    view = window.cards
+    main = next(c for c in view.cards if c.function.name == "addKeyValuePair")
+    size = next(v for v in view.value_cards_of(main) if v.parameter.name == "size")
+
+    def click(item, rect):
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                         view.mapFromScene(item.mapToScene(rect.center())))
+
+    click(size, size.close_rect())  # a value card's X: just that value card
+    assert [v.parameter.name for v in view.value_cards_of(main)] == ["dataCSV"]
+    assert "size" not in main.input_values
+    click(main, main.close_rect())  # a function card's X: it and its value cards
+    assert [c.function.name for c in view.cards] == ["helper"]
+    assert view._value_cards == {}
+
+
+def test_save_as_needs_a_code_file(make_window):
+    window = make_window()
+    window.save_diagram_as()
+    assert "Open a code file first" in window.message.text()
